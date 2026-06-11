@@ -19,14 +19,17 @@ class Layer(str, Enum):
     COMPONENT = "COMPONENT"
     CONFIG = "CONFIG"
     BATCH = "BATCH"          # Spring Batch Job/Step/Tasklet/Reader/Processor/Writer
-    EXTERNAL = "EXTERNAL"    # HTTP/JDBC/Feign/Kafka client crossing the boundary
+    EXTERNAL = "EXTERNAL"    # 3rd-party HTTP client crossing the boundary (unresolved)
+    RESOURCE = "RESOURCE"    # shared infra: Kafka topic / Redis / DB table
     OTHER = "OTHER"
 
 
 class EdgeKind(str, Enum):
-    INTERNAL = "internal"    # call resolved to another node in the codebase
-    EXTERNAL = "external"    # call into an external client (RestTemplate, WebClient, ...)
+    INTERNAL = "internal"    # call resolved to another node in the same codebase
+    EXTERNAL = "external"    # call into a 3rd-party client (RestTemplate, WebClient, ...)
     BATCH = "batch"          # structural batch wiring (job -> step -> reader ...)
+    S2S = "s2s"              # server-to-server: resolved to ANOTHER analyzed service
+    RESOURCE = "resource"    # service <-> Kafka/Redis/DB usage
 
 
 class CallMode(str, Enum):
@@ -51,6 +54,8 @@ class MethodNode:
     endpoint: Optional[str] = None      # full URL path (class base + method path)
     external_service: Optional[str] = None  # Feign client name / external client type
     external_url: Optional[str] = None       # full external URL (base + path), when known
+    resource_type: Optional[str] = None      # RESOURCE node: "kafka-topic" | "redis" | "db-table"
+    description: Optional[str] = None         # API 한글 설명 (REST Docs 등에서 연결)
 
     def to_json(self) -> dict:
         return {
@@ -65,6 +70,8 @@ class MethodNode:
             "endpoint": self.endpoint,
             "externalService": self.external_service,
             "externalUrl": self.external_url,
+            "resourceType": self.resource_type,
+            "description": self.description,
             "file": self.file,
             "line": self.line,
             "project": self.project,

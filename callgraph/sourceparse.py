@@ -151,6 +151,8 @@ class ParsedFunction:
     calls: list[ParsedCall] = field(default_factory=list)
     visibility: str = "public"
     body_text: str = ""
+    kafka_produced: list[str] = field(default_factory=list)   # topics sent via KafkaTemplate
+    kafka_consumed: list[str] = field(default_factory=list)   # @KafkaListener topics
 
     @property
     def is_async(self) -> bool:
@@ -173,6 +175,9 @@ class ParsedType:
     base_path: Optional[str] = None     # class-level @RequestMapping base path
     feign_name: Optional[str] = None    # @FeignClient(name=...)
     feign_url: Optional[str] = None     # @FeignClient(url=...)
+    is_entity: bool = False             # @Entity
+    table_name: Optional[str] = None    # @Table(name=...) or derived
+    repo_entity: Optional[str] = None   # entity type from JpaRepository<Entity, Id>
 
 
 @dataclass
@@ -266,6 +271,37 @@ def _extract_path(args: str) -> str:
     return m.group(1) if m else ""
 
 
+_TABLE_RE = re.compile(r"@Table\b\s*\([^)]*?name\s*=\s*\"([^\"]+)\"")
+_REPO_GENERIC_RE = re.compile(
+    r"\b(?:Jpa|Crud|PagingAndSorting|ListCrud|Reactive(?:Crud)?|Coroutine(?:Crud)?)Repository"
+    r"\s*<\s*([\w.]+)")
+_KAFKA_LISTENER_RE = re.compile(r"@KafkaListener\b\s*\(([^)]*)\)", re.S)
+_KAFKA_SEND_RE = re.compile(r"\.\s*send(?:Default)?\s*\(\s*\"([^\"]+)\"")
+_STRING_LIT_RE = re.compile(r'"([^"]+)"')
+
+
+def _extract_entity_table(window: str, simple_name: str) -> tuple[bool, Optional[str]]:
+    """(is_entity, table_name) from @Entity/@Table in *original* source window."""
+    if "@Entity" not in window:
+        return False, None
+    m = _TABLE_RE.search(window)
+    if m:
+        return True, m.group(1)
+    # default JPA table name = entity simple name (left as-is; callers may lower-case)
+    return True, simple_name
+
+
+def _extract_kafka_consumed(window: str) -> list[str]:
+    """Topics from @KafkaListener(topics = [...]) in *original* source window."""
+    m = _KAFKA_LISTENER_RE.search(window)
+    if not m:
+        return []
+    args = m.group(1)
+    topics_m = re.search(r"topics\s*=\s*(\[[^\]]*\]|\"[^\"]*\")", args)
+    seg = topics_m.group(1) if topics_m else args
+    return _STRING_LIT_RE.findall(seg)
+
+
 def _collect_annotations_before(cleaned: str, start: int) -> list[str]:
     """Scan backwards from a declaration start to gather preceding @Annotations."""
     # take up to 400 chars before, stop at a line that is neither blank nor an annotation
@@ -351,10 +387,14 @@ def parse_source(path: str, src: str, *, project=None, module=None) -> ParsedFil
         ann_window = src[max(0, hstart - 400):hstart]
         _, base_path = _extract_mapping(ann_window)
         feign_name, feign_url = _extract_feign(ann_window)
+        is_entity, table_name = _extract_entity_table(ann_window, name)
+        repo_m = _REPO_GENERIC_RE.search(header)
+        repo_entity = repo_m.group(1).split(".")[-1] if repo_m else None
         supertypes = _parse_supertypes(header)
         ctor_fields = _parse_params(header)
         raw_types.append(ParsedType(
             base_path=base_path, feign_name=feign_name, feign_url=feign_url,
+            is_entity=is_entity, table_name=table_name, repo_entity=repo_entity,
             simple_name=name, kind=kind, annotations=anns, supertypes=supertypes,
             ctor_fields=ctor_fields, fields={}, functions=[],
             line=_line_of(starts, hstart), header_start=hstart,
@@ -377,9 +417,14 @@ def parse_source(path: str, src: str, *, project=None, module=None) -> ParsedFil
             bend = _match_braces(cleaned, body_open)
             body_text = cleaned[bstart:bend]
         elif expr_eq is not None:
+            # Skip whitespace/newlines after '=' so a multi-line expression body
+            # (`fun f() =\n    expr`) is captured, not truncated at the first newline.
+            b = expr_eq
+            while b < len(cleaned) and cleaned[b] in " \t\r\n":
+                b += 1
             header = cleaned[hstart:expr_eq]
-            bstart = expr_eq
-            bend = _stmt_end(cleaned, expr_eq)
+            bstart = b
+            bend = _stmt_end(cleaned, b)
             body_text = cleaned[bstart:bend]
         else:
             # abstract / interface method, no body
@@ -393,11 +438,16 @@ def parse_source(path: str, src: str, *, project=None, module=None) -> ParsedFil
         ret = _parse_return_type(header, language)
         params = _parse_params(header)
         fn_http, fn_path = _extract_mapping(src[max(0, hstart - 400):hstart])
+        kafka_consumed = _extract_kafka_consumed(src[max(0, hstart - 400):hstart])
+        # Kafka producer topics need the ORIGINAL body (string literals are blanked in `cleaned`).
+        kafka_produced = (_KAFKA_SEND_RE.findall(src[bstart:bend]) if bstart >= 0 else [])
         raw_funcs.append(ParsedFunction(
             name=name, line=_line_of(starts, hstart), header_start=hstart,
             body_start=bstart, body_end=bend, modifiers=mods, annotations=anns,
             return_type=ret, http_method=fn_http, path=fn_path,
             params=params, visibility=visibility, body_text=body_text,
+            kafka_produced=list(dict.fromkeys(kafka_produced)),
+            kafka_consumed=kafka_consumed,
         ))
 
     # ---- assign functions to innermost containing type ----

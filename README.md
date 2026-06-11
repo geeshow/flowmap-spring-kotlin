@@ -78,6 +78,56 @@ flowchart LR
 
 > 특정 API만 보고 싶으면 `search`로 해당 메서드의 BFS 서브그래프를 뽑아 같은 식으로 그릴 수 있습니다.
 
+### MSA 예시 — 서버 간 호출(S2S) · Kafka 이벤트 · DB/Redis
+
+`order-service` / `user-service` / `notification-service`(데모)를 **각각 따로** 분석한
+결과입니다. 한 서비스의 Feign 호출이 다른 분석된 서비스의 엔드포인트와 매칭되면 `external`이
+아니라 **그 서비스로(`s2s`)** 이어지고, Kafka는 `producer → topic → consumer`로,
+DB/Redis는 공유 리소스 노드로 표현됩니다. (점선 = 비동기/이벤트)
+
+```mermaid
+flowchart LR
+  subgraph ORD["order-service"]
+    oc["OrderController.create<br/>POST /orders"]:::ctrl
+    os["OrderService.placeOrder"]:::svc
+  end
+  subgraph USR["user-service"]
+    uc["UserController.getUser<br/>GET /internal/users/{id}<br/>«사용자 단건 조회»"]:::ctrl
+  end
+  subgraph NOTI["notification-service"]
+    nl["OrderEventListener.onOrderCreated"]:::svc
+    ns["NotificationService.notifyUser"]:::svc
+  end
+  TOPIC(["kafka: order.created"]):::kafka
+  ORDERS[("db: orders")]:::db
+  USERS[("db: users")]:::db
+  REDIS[("redis")]:::redis
+  EMAIL["ext: api.email-vendor.com"]:::ext
+
+  oc --> os
+  os -->|s2s| uc
+  os --> ORDERS
+  os --> REDIS
+  os -. "kafka:produce" .-> TOPIC
+  TOPIC -. "kafka:consume" .-> nl
+  nl --> ns
+  ns -->|s2s| uc
+  ns --> EMAIL
+  uc --> USERS
+
+  classDef ctrl  fill:#dbeafe,stroke:#1e40af,color:#1e3a8a;
+  classDef svc   fill:#dcfce7,stroke:#166534,color:#14532d;
+  classDef kafka fill:#fae8ff,stroke:#86198f,color:#701a75;
+  classDef db    fill:#fef9c3,stroke:#854d0e,color:#713f12;
+  classDef redis fill:#ffe4e6,stroke:#9f1239,color:#881337;
+  classDef ext   fill:#fee2e2,stroke:#991b1b,color:#7f1d1d;
+```
+
+핵심: `order-service`와 `notification-service`가 **각각 따로 분석돼도** 둘 다
+`user-service.getUser`로 S2S 연결되고, `order-service`가 발행한 `order.created` 이벤트가
+`notification-service`로 이어집니다(크로스-런 레지스트리). REST Docs가 있으면 엔드포인트에
+한글 설명(`«사용자 단건 조회»`)까지 붙습니다. 자세한 사용법은 [`callgraph/README.md`](callgraph/README.md)의 "MSA" 절 참고.
+
 ---
 
 ## 두 가지 구현
@@ -129,11 +179,13 @@ cd kotlin-analyzer
 
 각 노드에는 어느 `project`/`module`에서 왔는지 함께 기록됩니다.
 
-이 저장소에는 데모용 샘플 프로젝트 **`.repo/sample-shop/`** 만 포함되어 있습니다
-(controller→service→repository, 동기/비동기, `@FeignClient`/`WebClient`, 스프링 배치를
-모두 포함). 분석하려는 실제 프로젝트는 `.repo/<your-project>/`에 직접 넣으면 됩니다.
-`.gitignore`가 `.repo/sample-shop` 외의 `.repo/*`와 `graph.json`(분석 산출물)을
-**커밋에서 제외**합니다 — 사내/외부 소스가 실수로 공개되지 않도록.
+이 저장소에는 데모용 샘플만 포함되어 있습니다:
+- **`.repo/sample-shop/`** — 단일 서비스 데모(controller→service→repository, 동기/비동기, `@FeignClient`/`WebClient`, 스프링 배치)
+- **`.repo/order-service`·`user-service`·`notification-service`** — MSA 데모(서버 간 S2S 호출, Kafka 이벤트, Redis/DB, REST Docs 설명)
+
+분석하려는 실제 프로젝트는 `.repo/<your-project>/`에 넣으면 됩니다. `.gitignore`가
+이 데모들 외의 `.repo/*`, 그리고 **분석 산출물**(`graph.json`, `.flowmap/`)을
+**커밋에서 제외**합니다 — 사내/외부 소스나 결과물이 실수로 공개되지 않도록.
 
 ---
 
@@ -155,15 +207,17 @@ cd kotlin-analyzer
   "edges": [
     { "source": "...#placeOrder", "target": "...#save",
       "mode": "sync",        // sync | async
-      "kind": "internal",    // internal | external | batch
-      "relation": "call",    // call | batch:step | batch:reader | batch:processor | ...
+      "kind": "internal",    // internal | external | s2s | batch | resource
+      "relation": "call",    // call | batch:* | kafka:produce | kafka:consume | redis:io | db:io
       "callSiteFile": "...", "callSiteLine": 16 }
   ]
 }
 ```
 
-Kotlin 구현은 외부 노드에 `externalService`/`externalUrl`/`httpMethod`/`endpoint`와
-추가 키 `urlPlaceholder`(원본 `${...}`)·`clientPackage`(외부 클라이언트 패키지)를 채웁니다.
+노드에는 이 외에 `resourceType`(Kafka/Redis/DB 노드), `description`(API 한글 설명) 키가
+있고, MSA/S2S·Kafka·DB·Redis·레지스트리(`.flowmap/registry.json`) 산출물까지 포함한
+**전체 스키마는 [`callgraph/README.md`](callgraph/README.md)의 "산출물 스키마 (상세)"** 절에 정리돼 있습니다.
+Kotlin 구현은 외부 노드에 추가로 `urlPlaceholder`(원본 `${...}`)·`clientPackage`를 채웁니다.
 
 ---
 

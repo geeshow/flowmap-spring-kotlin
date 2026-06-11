@@ -35,11 +35,30 @@ REPOSITORY_INHERITED_METHODS: set[str] = {
     "deleteAll", "deleteAllById", "flush",
 }
 
-# Simple type names treated as external clients when used as a call receiver.
+# Simple type names treated as external (3rd-party) HTTP clients when used as a receiver.
 EXTERNAL_SIMPLE_TYPES: set[str] = {
-    "RestTemplate", "WebClient", "RestClient", "JdbcTemplate",
-    "NamedParameterJdbcTemplate", "KafkaTemplate", "WebTestClient",
+    "RestTemplate", "WebClient", "RestClient", "WebTestClient",
 }
+
+# ---- infra resources (Kafka / Redis / DB) ----------------------------------
+
+# Kafka producer: a call on one of these types.
+KAFKA_TEMPLATE_TYPES: set[str] = {"KafkaTemplate", "ReplyingKafkaTemplate"}
+KAFKA_SEND_METHODS: set[str] = {"send", "sendDefault", "sendOffsetsToTransaction"}
+# Kafka consumer: method annotated with this.
+KAFKA_LISTENER_ANNOTATIONS: set[str] = {"KafkaListener", "KafkaHandler", "RetryableTopic"}
+
+# Redis: a call on one of these types -> redis usage.
+REDIS_TEMPLATE_TYPES: set[str] = {
+    "RedisTemplate", "StringRedisTemplate", "ReactiveRedisTemplate",
+    "ReactiveStringRedisTemplate",
+}
+
+# JDBC templates -> treated as DB usage (not 3rd-party HTTP).
+JDBC_TEMPLATE_TYPES: set[str] = {"JdbcTemplate", "NamedParameterJdbcTemplate"}
+
+# JPA entity marker.
+ENTITY_ANNOTATIONS: set[str] = {"Entity"}
 
 # Internal-name prefixes (by import FQCN) treated as external calls.
 EXTERNAL_PREFIXES: tuple[str, ...] = (

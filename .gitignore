@@ -18,13 +18,19 @@ graph.json
 *.graph.json
 
 # --- analyzed source projects -------------------------------------------------
-# .repo/ holds the code being analyzed. Only the bundled demo (sample-shop) is
+# .repo/ holds the code being analyzed. Only the bundled DEMO projects are
 # tracked; real/proprietary projects must NOT be published.
 /.repo/*
 !/.repo/sample-shop/
+!/.repo/order-service/
+!/.repo/user-service/
+!/.repo/notification-service/
 
 # (gradle wrapper jar IS tracked — do not add a global *.jar ignore)
 
 # python
 __pycache__/
 *.pyc
+
+# flowmap registry (analysis output; may contain internal endpoints)
+.flowmap/

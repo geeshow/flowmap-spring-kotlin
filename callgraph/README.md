@@ -49,37 +49,108 @@ python3 -m callgraph stats --graph graph.json
 
 `search`는 `--graph`(미리 만든 JSON)나 `--repo`(즉석 분석) 둘 다 입력으로 받습니다.
 
-## 출력 스키마 (node-link)
+## 산출물 스키마 (상세)
+
+`analyze`는 두 가지 산출물을 만듭니다: **그래프 JSON**(`--out`)과 **레지스트리 JSON**
+(`--registry`, 크로스-런 누적). 아래는 두 파일의 전체 스키마입니다.
+
+### 1) 그래프 JSON (node-link)
+
+최상위 봉투. `source`/`target` 키는 그래프 라이브러리(NetworkX, D3 등) node-link 관례를 따릅니다.
 
 ```jsonc
 {
-  "directed": true, "multigraph": true,
-  "meta": { ... },
-  "nodes": [
-    { "id": "com.shop.order.OrderService#placeOrder",
-      "fqcn": "com.shop.order.OrderService", "method": "placeOrder",
-      "layer": "SERVICE",            // CONTROLLER|SERVICE|REPOSITORY|COMPONENT|CONFIG|BATCH|EXTERNAL|OTHER
-      "visibility": "public",
-      "async": false,               // suspend / @Async / reactive 반환 여부
-      "returnType": "Order",
-      "httpMethod": null,           // 컨트롤러 엔드포인트면 GET/POST/...
-      "endpoint": null,             // 컨트롤러면 풀 URL 경로, 외부 Feign이면 외부 경로
-      "externalService": null,      // 외부 노드: Feign client name / 클라이언트 타입
-      "externalUrl": null,          // 외부 노드: 전체 외부 URL (baseUrl + path), 알 수 있을 때
-      "file": "sample-shop/order-api/.../OrderService.kt", "line": 14,
-      "project": "sample-shop", "module": "order-api" }
-  ],
-  "edges": [
-    { "source": "...#placeOrder", "target": "...#save",
-      "mode": "sync",               // sync | async  (동기/비동기)
-      "kind": "internal",           // internal | external | batch
-      "relation": "call",           // call | batch:step | batch:reader | batch:processor | batch:writer | batch:tasklet | batch:listener
-      "callSiteFile": "...", "callSiteLine": 16 }
-  ]
+  "directed": true,
+  "multigraph": true,
+  "meta": { ... },        // 아래 meta 표 참고
+  "nodes": [ {MethodNode}, ... ],
+  "edges": [ {CallEdge}, ... ]
 }
 ```
 
-> `source`/`target` 키는 그래프 라이브러리(NetworkX, D3 등) node-link 관례를 따릅니다.
+#### `meta` (분석 실행 정보)
+
+| 키 | 의미 |
+|---|---|
+| `command` | `analyze` / `search` / `stats` |
+| `repo`, `project` | 분석 대상 루트 / 한정한 프로젝트(없으면 null) |
+| `files`, `nodes`, `edges` | 파싱한 파일 수 / 노드 수 / 엣지 수 |
+| `query`, `roots`, `direction`, `depth` | (search 전용) 검색어/시작노드/방향/깊이 |
+
+#### `MethodNode` (노드)
+
+| 키 | 타입 | 의미 / 채워지는 경우 |
+|---|---|---|
+| `id` | string | 노드 고유 ID. 형식은 노드 종류별로 다름 — 아래 "노드 ID 형식" 참고 |
+| `fqcn` | string | 패키지 포함 클래스명(리소스 노드는 식별자) |
+| `method` | string | 메서드명(리소스 노드는 라벨: 토픽/테이블/`Redis`) |
+| `layer` | enum | `CONTROLLER`·`SERVICE`·`REPOSITORY`·`COMPONENT`·`CONFIG`·`BATCH`·`EXTERNAL`·`RESOURCE`·`OTHER` |
+| `visibility` | string | `public`·`private`·`protected`·`internal` |
+| `async` | bool | `suspend` / `@Async`·`@Scheduled` / reactive 반환(`Mono`·`Flux`·`CompletableFuture`…) |
+| `returnType` | string? | 반환 타입(제네릭 제거된 단순명) |
+| `httpMethod` | string? | 컨트롤러 엔드포인트·외부/S2S 노드의 HTTP 메서드(`GET`/`POST`/…/`ANY`) |
+| `endpoint` | string? | 컨트롤러: 풀 URL 경로(클래스 `@RequestMapping` + 메서드 매핑). 외부/S2S: 대상 경로 |
+| `externalService` | string? | **EXTERNAL 노드**: Feign client name 또는 클라이언트 타입(RestTemplate 등) |
+| `externalUrl` | string? | **EXTERNAL 노드**: 전체 외부 URL(base+path). `${...}` placeholder면 그대로 |
+| `resourceType` | string? | **RESOURCE 노드**: `kafka-topic` / `redis` / `db-table` |
+| `description` | string? | API 한글 설명(REST Docs 연동 시). S2S 타깃에도 전파됨 |
+| `file`, `line` | string?, int? | 선언 위치(repo 상대경로 : 1-based 라인). 합성/스텁 노드는 null |
+| `project`, `module` | string? | 출처: `.repo/<project>/<module>`. **노드 그룹핑·S2S 매칭의 키** |
+
+#### 노드 ID 형식
+
+| 종류 | `id` 예시 |
+|---|---|
+| 내부 메서드 | `com.acme.order.OrderService#placeOrder` |
+| 외부(3rd-party) | `ext:RestTemplate#exchange`, `ext:PaymentClient#charge` |
+| S2S 타깃(=provider의 내부 노드) | `com.acme.user.UserController#getUser` |
+| Kafka 토픽 | `kafka:order.created` |
+| DB 테이블 / JDBC | `db:table:orders`, `db:jdbc` |
+| Redis | `redis` |
+
+#### `CallEdge` (엣지)
+
+| 키 | 타입 | 의미 |
+|---|---|---|
+| `source`, `target` | string | 호출자 / 피호출자 노드 `id` |
+| `mode` | enum | `sync` / `async`(동기/비동기) |
+| `kind` | enum | `internal`(같은 코드베이스) · `external`(3rd-party) · `s2s`(분석된 다른 서비스) · `batch`(배치 와이어링) · `resource`(Kafka/Redis/DB) |
+| `relation` | string | `call` · `batch:step`·`batch:reader`·`batch:processor`·`batch:writer`·`batch:tasklet`·`batch:listener` · `kafka:produce`·`kafka:consume` · `redis:io` · `db:io` |
+| `callSiteFile`, `callSiteLine` | string?, int? | 호출 지점(호출자 파일 : 라인) |
+
+> 엣지 dedup 키 = `(source, target, relation, callSiteLine)`.
+
+### 2) 레지스트리 JSON (`.flowmap/registry.json`)
+
+여러 `analyze` 실행에 걸쳐 **노출 엔드포인트 + Kafka producer/consumer**를 누적합니다.
+새 서비스를 분석하면 여기 기록된 기존 서비스와 자동으로 S2S/이벤트 연결됩니다.
+
+```jsonc
+{
+  "version": 1,
+  "services": { "<project>": { } },          // 분석된 적 있는 서비스 목록
+  "endpoints": [                              // 서비스가 노출하는 HTTP 엔드포인트
+    { "project": "user-service",
+      "nodeId": "com.acme.user.UserController#getUser",
+      "fqcn": "com.acme.user.UserController", "method": "getUser",
+      "httpMethod": "GET", "endpoint": "/internal/users/{id}",
+      "description": "사용자 단건 조회" }
+  ],
+  "kafka": {                                  // 토픽별 producer/consumer
+    "order.created": {
+      "producers": [ { "project": "order-service", "nodeId": "...#placeOrder",
+                       "fqcn": "...", "method": "placeOrder", "layer": "SERVICE" } ],
+      "consumers": [ { "project": "notification-service", "nodeId": "...#onOrderCreated",
+                       "fqcn": "...", "method": "onOrderCreated", "layer": "COMPONENT" } ]
+    }
+  }
+}
+```
+
+**S2S 매칭 규칙**: Feign 호출의 (HTTP 메서드, 경로)를 `endpoints`와 비교 — 경로는 `{var}`
+정규화(`/users/{id}` == `/users/{userNo}`)하고, 여러 후보면 Feign `name`이 provider
+`project`와 일치하는 것을 우선합니다. 매칭되면 `kind:"s2s"` 엣지로 그 provider 노드에 연결.
+**Kafka**: 같은 토픽의 producer/consumer가 서로 다른 실행에서 등록돼도 공유 토픽 노드로 이어집니다.
 
 ## 동기 / 비동기 판별 규칙
 
@@ -146,14 +217,75 @@ settlementStep -[batch:writer]->    settlementWriter
 - 기본적으로 OTHER(미주석) 클래스는 노드로 만들지 않습니다(`--include-other`로 포함).
   단, tracked 노드가 호출하는 OTHER 메서드는 엣지 종점으로 끌려 들어옵니다.
 
+## MSA: 서버 간 호출 · Kafka · Redis · DB
+
+여러 서비스를 분석할 때, 한 서비스의 외부 호출을 **다른 분석된 서비스**로 연결하고
+인프라(Kafka/Redis/DB) 사용 관계를 표현합니다. 각 노드는 `project`(= `.repo/<project>`)로
+그룹핑됩니다.
+
+### 크로스-런 레지스트리 (`.flowmap/registry.json`)
+
+분석 결과(노출 엔드포인트, Kafka producer/consumer)를 누적 저장합니다. **동시에 분석할
+필요가 없습니다** — 나중에 분석한 서비스가 기존에 분석된 서비스와 자동으로 연결됩니다.
+
+```bash
+# 각각 따로 분석해도 자동으로 이어진다
+python3 -m callgraph analyze --repo .repo --project user-service          # 엔드포인트 등록
+python3 -m callgraph analyze --repo .repo --project order-service         # user-service로 S2S 연결됨
+python3 -m callgraph analyze --repo .repo --project notification-service  # order의 이벤트/ user S2S 연결됨
+```
+
+기본 레지스트리는 `.flowmap/registry.json`(`--registry`로 변경, `--no-registry`로 읽기 전용).
+
+### Server-to-Server (S2S)
+
+`@FeignClient`(/`@HttpExchange`) 호출이 **분석된 다른 서비스의 컨트롤러 엔드포인트와
+매칭**(HTTP 메서드 + 경로, Feign `name`으로 서비스 확정)되면, `external`이 아니라
+그 **provider 노드(프로젝트명 포함)** 로 `kind="s2s"` 엣지로 연결됩니다. 매칭 안 되면
+기존처럼 `external`. 경로는 `{var}` 정규화로 비교(`/users/{id}` == `/users/{userNo}`).
+
+### Kafka 이벤트 S2S
+
+`kafkaTemplate.send("topic", …)` → `kafka:<topic>`(RESOURCE) 노드로 `kafka:produce`,
+`@KafkaListener(topics=["topic"])` → `kafka:consume`. 토픽 노드는 **서비스 간 공유**되어
+`producer → topic → consumer`가 이어집니다(레지스트리 경유, 별도 분석돼도 연결).
+
+### Redis / DB
+
+- Redis: `RedisTemplate`/`StringRedisTemplate` 호출 → `redis` RESOURCE 노드(`redis:io`).
+- DB: `JpaRepository<Entity,…>` → `@Entity`/`@Table(name=)`을 따라 `db:table:<table>`
+  RESOURCE 노드(`db:io`). 두 서비스가 같은 테이블을 쓰면 같은 노드로 보입니다.
+- JdbcTemplate → `db:jdbc` RESOURCE 노드.
+
+### API 한글 설명 (Spring REST Docs)
+
+`--restdocs <generated-snippets dir>`를 주면, REST Docs 스니펫의 `http-request.adoc`에서
+(메서드, 경로)를, 같은 폴더의 `description.adoc`(관례)에서 한글 설명을 읽어 컨트롤러
+엔드포인트 노드의 `description`에 붙입니다. 이 설명은 레지스트리를 거쳐 S2S 엣지의 타깃까지
+전파됩니다.
+
+```bash
+python3 -m callgraph analyze --repo .repo --project user-service \
+        --restdocs .repo/user-service/build/generated-snippets
+```
+
+> 한계: 표준 REST Docs 스니펫엔 "설명" 필드가 없어, 한글 설명은 `description.adoc`를
+> 명시적으로 남기는 관례가 필요합니다(테스트에서 커스텀 스니펫). 더 풍부한 설명이 필요하면
+> `restdocs-api-spec`(OpenAPI 생성) 또는 springdoc의 `@Operation(summary=)` 연동이 대안입니다.
+
+새 엣지 종류: `s2s`(서버 간), `resource`(kafka/redis/db). 새 노드 레이어: `RESOURCE`.
+새 노드 키: `resourceType`(`kafka-topic`/`redis`/`db-table`), `description`.
+
 ## 코드 구조
 
 ```
 callgraph/
   model.py        # MethodNode / CallEdge / CallGraph (node-link 직렬화)
-  classify.py     # 레이어/외부/async/배치 시그니처 테이블 (여기서 커스터마이즈)
-  sourceparse.py  # 주석·문자열 제거 후 클래스/함수/호출/지역변수 파싱
-  build.py        # 타입 기반 호출 해석 + 배치 와이어링 -> CallGraph
+  classify.py     # 레이어/외부/async/배치/Kafka/Redis/DB 시그니처 테이블
+  sourceparse.py  # 주석·문자열 제거 후 클래스/함수/호출/Kafka·엔티티 파싱
+  build.py        # 타입 기반 호출 해석 + 배치/S2S/리소스 와이어링 -> CallGraph
+  registry.py     # 크로스-런 레지스트리(.flowmap/registry.json): 엔드포인트·Kafka 누적
+  restdoc.py      # Spring REST Docs 스니펫 -> (메서드,경로)별 한글 설명
   search.py       # callers/callees BFS 서브그래프
   scanner.py      # .repo/<project>/<module> 워킹 + provenance
   cli.py          # analyze / search / stats

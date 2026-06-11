@@ -12,6 +12,8 @@ import json
 import sys
 from collections import Counter
 
+from . import registry as R
+from . import restdoc
 from .build import build_graph
 from .model import CallGraph, CallEdge, CallMode, EdgeKind, Layer, MethodNode
 from .scanner import scan_repo
@@ -23,7 +25,8 @@ def _graph_from_args(args) -> CallGraph:
         with open(args.graph, "r", encoding="utf-8") as fh:
             return _graph_from_json(json.load(fh))
     files = scan_repo(args.repo, project_filter=getattr(args, "project", None))
-    return build_graph(files, include_other=getattr(args, "include_other", False))
+    reg = R.load(getattr(args, "registry", None))
+    return build_graph(files, include_other=getattr(args, "include_other", False), registry=reg)
 
 
 def _graph_from_json(data: dict) -> CallGraph:
@@ -33,7 +36,8 @@ def _graph_from_json(data: dict) -> CallGraph:
         file=n.get("file"), line=n.get("line"), project=n.get("project"),
         module=n.get("module"), http_method=n.get("httpMethod"),
         endpoint=n.get("endpoint"), external_service=n.get("externalService"),
-        external_url=n.get("externalUrl")) for n in data["nodes"]]
+        external_url=n.get("externalUrl"), resource_type=n.get("resourceType"),
+        description=n.get("description")) for n in data["nodes"]]
     edges = [CallEdge(
         source=e["source"], target=e["target"], mode=CallMode(e["mode"]),
         kind=EdgeKind(e["kind"]), relation=e["relation"],
@@ -56,7 +60,19 @@ def _dump(graph: CallGraph, out: str | None, meta: dict) -> None:
 
 def cmd_analyze(args) -> int:
     files = scan_repo(args.repo, project_filter=args.project)
-    graph = build_graph(files, include_other=args.include_other)
+    reg = R.load(args.registry)
+    descriptions = restdoc.load(args.restdocs)
+    if args.restdocs:
+        print(f"restdocs: loaded {len(descriptions)} API descriptions from {args.restdocs}",
+              file=sys.stderr)
+    graph = build_graph(files, include_other=args.include_other, registry=reg,
+                        descriptions=descriptions)
+    if args.registry and not args.no_registry:
+        R.update_from_graph(reg, graph)
+        R.save(args.registry, reg)
+        print(f"registry: {args.registry} "
+              f"({len(reg['endpoints'])} endpoints, {len(reg['kafka'])} topics, "
+              f"{len(reg['services'])} services)", file=sys.stderr)
     meta = {"command": "analyze", "repo": args.repo, "project": args.project,
             "files": len(files), "nodes": len(graph.nodes), "edges": len(graph.edges)}
     _dump(graph, args.out, meta)
@@ -105,6 +121,13 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--out", default=None, help="output JSON path (default: stdout)")
     a.add_argument("--include-other", action="store_true",
                    help="also include unannotated (OTHER) classes")
+    a.add_argument("--registry", default=".flowmap/registry.json",
+                   help="cross-run registry for S2S/Kafka linking (default: .flowmap/registry.json)")
+    a.add_argument("--no-registry", action="store_true",
+                   help="resolve against the registry but do not update it")
+    a.add_argument("--restdocs", default=None,
+                   help="Spring REST Docs snippets dir (build/generated-snippets) "
+                        "to attach Korean API descriptions to endpoints")
     a.set_defaults(func=cmd_analyze)
 
     s = sub.add_parser("search", help="BFS callers/callees of a method")
@@ -114,6 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--graph", default=None, help="prebuilt graph.json to query")
     s.add_argument("--project", default=None)
     s.add_argument("--include-other", action="store_true")
+    s.add_argument("--registry", default=".flowmap/registry.json")
     s.add_argument("--direction", choices=["both", "callers", "callees"], default="both")
     s.add_argument("--depth", type=int, default=3)
     s.add_argument("--out", default=None)
@@ -125,6 +149,7 @@ def build_parser() -> argparse.ArgumentParser:
     gg.add_argument("--graph", default=None)
     st.add_argument("--project", default=None)
     st.add_argument("--include-other", action="store_true")
+    st.add_argument("--registry", default=".flowmap/registry.json")
     st.set_defaults(func=cmd_stats)
     return p
 

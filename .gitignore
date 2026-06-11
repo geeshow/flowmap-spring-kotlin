@@ -1,0 +1,30 @@
+# --- build artifacts ---------------------------------------------------------
+build/
+.gradle/
+.kotlin/
+*.class
+out/
+
+# --- IDE / local --------------------------------------------------------------
+.idea/
+.claude/
+*.iml
+.DS_Store
+
+# --- generated analysis output ------------------------------------------------
+# graph.json embeds analyzed-project internals (package names, file paths,
+# resolved internal URLs) — never publish it.
+graph.json
+*.graph.json
+
+# --- analyzed source projects -------------------------------------------------
+# .repo/ holds the code being analyzed. Only the bundled demo (sample-shop) is
+# tracked; real/proprietary projects must NOT be published.
+/.repo/*
+!/.repo/sample-shop/
+
+# (gradle wrapper jar IS tracked — do not add a global *.jar ignore)
+
+# python
+__pycache__/
+*.pyc

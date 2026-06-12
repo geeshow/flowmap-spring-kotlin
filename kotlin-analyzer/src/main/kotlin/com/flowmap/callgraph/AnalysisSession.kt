@@ -14,13 +14,17 @@ import org.jetbrains.kotlin.config.CommonConfigurationKeys
 import org.jetbrains.kotlin.config.CompilerConfiguration
 import org.jetbrains.kotlin.config.JVMConfigurationKeys
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
+import org.jetbrains.kotlin.descriptors.ClassKind
 import org.jetbrains.kotlin.descriptors.FunctionDescriptor
+import org.jetbrains.kotlin.descriptors.PropertyDescriptor
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtAnnotationEntry
 import org.jetbrains.kotlin.psi.KtCallExpression
+import org.jetbrains.kotlin.psi.KtClass
 import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtCollectionLiteralExpression
 import org.jetbrains.kotlin.psi.KtDotQualifiedExpression
+import org.jetbrains.kotlin.psi.KtEnumEntry
 import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
@@ -32,6 +36,7 @@ import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.DescriptorToSourceUtils
 import org.jetbrains.kotlin.resolve.calls.util.getResolvedCall
 import org.jetbrains.kotlin.resolve.descriptorUtil.fqNameSafe
+import org.jetbrains.kotlin.types.KotlinType
 import java.io.File
 
 /**
@@ -150,12 +155,17 @@ class AnalysisSession : Resolver {
                 ?.mapNotNull { it.constructor.declarationDescriptor?.name?.asString() }?.toSet().orEmpty()
             val funcs = cls.declarations.filterIsInstance<KtNamedFunction>().map { buildFunction(it, yml) }
             val (isEntity, tableName) = entityTableOf(cls)
+            val isEnum = desc?.kind == ClassKind.ENUM_CLASS
             return IrType(
                 fqcn = cls.fqName?.asString() ?: (cls.name ?: "?"),
                 simpleName = cls.name ?: "?",
                 packageName = kt.packageFqName.asString(),
-                kind = if (cls is org.jetbrains.kotlin.psi.KtClass && cls.isInterface()) "interface"
-                else if (cls is org.jetbrains.kotlin.psi.KtObjectDeclaration) "object" else "class",
+                kind = when {
+                    isEnum -> "enum"
+                    cls is org.jetbrains.kotlin.psi.KtClass && cls.isInterface() -> "interface"
+                    cls is org.jetbrains.kotlin.psi.KtObjectDeclaration -> "object"
+                    else -> "class"
+                },
                 annotationSimpleNames = annNames,
                 supertypeSimpleNames = superNames,
                 baseRequestPath = desc?.let { ext.basePathOf(it) },
@@ -167,7 +177,43 @@ class AnalysisSession : Resolver {
                 isEntity = isEntity,
                 tableName = tableName,
                 repoEntity = repoEntityOf(cls),
+                properties = propertiesOf(cls, desc),
+                enumEntries = if (isEnum) cls.declarations.filterIsInstance<KtEnumEntry>().map { it.name ?: "?" }
+                else emptyList(),
             )
+        }
+
+        /**
+         * DTO field schema source: primary-constructor `val`/`var` params (in declaration
+         * order) followed by class-body properties declared on this type. Inherited and
+         * synthetic members are excluded. Types are resolved via [typeRefOf].
+         */
+        private fun propertiesOf(cls: KtClassOrObject, desc: ClassDescriptor?): List<IrProperty> {
+            if (desc == null) return emptyList()
+            val out = LinkedHashMap<String, IrProperty>()
+            val valVar = (cls as? KtClass)?.primaryConstructorParameters
+                ?.filter { it.hasValOrVar() }?.mapNotNull { it.name }?.toSet().orEmpty()
+            desc.unsubstitutedPrimaryConstructor?.valueParameters
+                ?.filter { it.name.asString() in valVar }
+                ?.forEach { vp -> out[vp.name.asString()] = IrProperty(vp.name.asString(), typeRefOf(vp.type)) }
+            try {
+                desc.unsubstitutedMemberScope.getContributedDescriptors()
+                    .filterIsInstance<PropertyDescriptor>()
+                    .filter { it.containingDeclaration == desc }
+                    .forEach { p -> out.putIfAbsent(p.name.asString(), IrProperty(p.name.asString(), typeRefOf(p.type))) }
+            } catch (_: Throwable) { /* member scope unavailable; ctor props suffice */ }
+            return out.values.toList()
+        }
+
+        /** Resolve a [KotlinType] into an Analysis-API-free [IrTypeRef], recursing into generics. */
+        private fun typeRefOf(t: KotlinType): IrTypeRef {
+            val decl = t.constructor.declarationDescriptor
+            val simple = decl?.name?.asString() ?: "Any"
+            val fqcn = (decl as? ClassDescriptor)?.fqNameSafe?.asString()
+            val args = t.arguments
+                .filterNot { it.isStarProjection }
+                .map { typeRefOf(it.type) }
+            return IrTypeRef(simple, fqcn, t.isMarkedNullable, args)
         }
 
         private fun buildFunction(fn: KtNamedFunction, yml: YamlPropertyResolver): IrFunction {
@@ -175,6 +221,14 @@ class AnalysisSession : Resolver {
             val annNames = desc?.annotations?.mapNotNull { it.fqName?.shortName()?.asString() }?.toSet().orEmpty()
             val (verb, path) = desc?.let { ext.mappingOf(it) } ?: (null to null)
             val ret = desc?.returnType?.constructor?.declarationDescriptor?.name?.asString()
+            val retRef = desc?.returnType?.let { typeRefOf(it) }
+            val params = desc?.valueParameters?.map { vp ->
+                IrParam(
+                    name = vp.name.asString(),
+                    type = typeRefOf(vp.type),
+                    annotationSimpleNames = vp.annotations.mapNotNull { it.fqName?.shortName()?.asString() }.toSet(),
+                )
+            }.orEmpty()
             val body = fn.bodyBlockExpression ?: fn.bodyExpression
             val calls = body?.collectDescendantsOfType<KtCallExpression>()?.map { classifyCall(it, yml) }.orEmpty()
             val batch = body?.let { collectBatchWiring(it) }.orEmpty()
@@ -187,6 +241,8 @@ class AnalysisSession : Resolver {
                 httpMethod = verb,
                 path = path,
                 isBean = "Bean" in annNames,
+                returnTypeRef = retRef,
+                parameters = params,
                 line = lineOf(fn),
                 calls = calls,
                 batchWiring = batch,

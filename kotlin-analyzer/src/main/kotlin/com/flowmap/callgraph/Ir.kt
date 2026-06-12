@@ -39,6 +39,31 @@ data class IrType(
     val isEntity: Boolean = false,        // @Entity
     val tableName: String? = null,        // @Table(name=...) or derived
     val repoEntity: String? = null,       // entity simple name from Repository<Entity, Id>
+    /** Declared properties (ctor val/var params + body properties) — DTO schema source. */
+    val properties: List<IrProperty> = emptyList(),
+    /** Enum entry names when [kind] == "enum"; empty otherwise. */
+    val enumEntries: List<String> = emptyList(),
+)
+
+/** A reference to a type, resolved to fqcn when possible. Analysis-API-free. */
+data class IrTypeRef(
+    val simpleName: String,
+    val fqcn: String?,                // null for type parameters / unresolved
+    val nullable: Boolean = false,
+    val args: List<IrTypeRef> = emptyList(),   // generic type arguments
+)
+
+/** A declared property of a DTO/type (for request/response schema). */
+data class IrProperty(
+    val name: String,
+    val type: IrTypeRef,
+)
+
+/** A function value parameter (for request payload / parameter docs). */
+data class IrParam(
+    val name: String,
+    val type: IrTypeRef,
+    val annotationSimpleNames: Set<String>,   // @PathVariable / @RequestParam / @RequestBody / ...
 )
 
 data class IrFunction(
@@ -50,6 +75,10 @@ data class IrFunction(
     val httpMethod: String?,          // method-level @*Mapping / @*Exchange verb
     val path: String?,                // method-level path
     val isBean: Boolean,
+    /** Fully resolved return type (for response schema); null when unresolvable. */
+    val returnTypeRef: IrTypeRef? = null,
+    /** Value parameters (for request payload / parameter docs). */
+    val parameters: List<IrParam> = emptyList(),
     val line: Int?,
     val calls: List<IrCall>,
     /** Spring Batch builder wiring found in the body: (relation, beanName argument). */

@@ -14,6 +14,9 @@ object JsonOutput {
     fun write(graph: CallGraph, meta: Map<String, Any?>): String =
         mapper.writeValueAsString(graph.toNodeLink(meta))
 
+    /** Pretty-print an arbitrary value (used for the OpenAPI document). */
+    fun writeValue(value: Any?): String = mapper.writeValueAsString(value)
+
     /** Load a prebuilt graph.json back into a CallGraph (for search/stats --graph). */
     fun read(text: String): CallGraph {
         val root = mapper.readTree(text)

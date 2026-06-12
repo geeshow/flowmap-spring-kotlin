@@ -15,6 +15,8 @@ fun main(args: Array<String>) {
     val opts = parseOpts(args.drop(1))
     when (cmd) {
         "analyze" -> cmdAnalyze(opts)
+        "openapi" -> cmdOpenApi(opts)
+        "impact" -> cmdImpact(opts)
         "combine" -> cmdCombine(opts)
         "search" -> cmdSearch(opts)
         "stats" -> cmdStats(opts)
@@ -90,6 +92,66 @@ private fun cmdAnalyze(opts: Opts) {
         "nodes" to graph.nodes.size, "edges" to graph.edges.size,
     )
     dump(graph, opts["--out"], meta)
+}
+
+private fun cmdOpenApi(opts: Opts) {
+    val repo = opts["--repo"] ?: "../.repo"
+    val files = AnalysisSession().analyze(
+        repoRoot = repo,
+        projectFilter = opts["--project"],
+        profile = opts["--profile"],
+        extraProps = loadProps(opts["--props"]),
+    )
+    val enrich = RestDocs.loadApi(opts["--restdocs"])
+    if (opts["--restdocs"] != null) {
+        System.err.println("restdocs: loaded ${enrich.size} API descriptions from ${opts["--restdocs"]}")
+    }
+    val title = opts["--title"] ?: opts["--project"] ?: "API"
+    val version = opts["--api-version"] ?: "1.0.0"
+    val doc = OpenApi.build(files, title = title, version = version, enrich = enrich)
+    val text = JsonOutput.writeValue(doc)
+    val out = opts["--out"]
+    @Suppress("UNCHECKED_CAST")
+    val pathCount = (doc["paths"] as? Map<String, *>)?.size ?: 0
+    @Suppress("UNCHECKED_CAST")
+    val schemaCount = ((doc["components"] as? Map<String, *>)?.get("schemas") as? Map<String, *>)?.size ?: 0
+    if (out != null) {
+        File(out).writeText(text)
+        System.err.println("wrote $out: $pathCount paths, $schemaCount schemas")
+    } else {
+        println(text)
+    }
+}
+
+private fun cmdImpact(opts: Opts) {
+    // git repo to mine: explicit --git, else <--repo>/<--project>, else --repo
+    val git = opts["--git"]?.let { File(it) }
+        ?: opts["--project"]?.let { File(opts["--repo"] ?: "../.repo", it) }
+        ?: File(opts["--repo"] ?: "../.repo")
+    if (!GitLog.isRepo(git)) {
+        System.err.println("impact: ${git.path} is not a git work tree (pass --git <repo>)"); exitProcess(2)
+    }
+    val branch = GitLog.resolveBranch(git, opts["--branch"]) ?: run {
+        System.err.println("impact: could not resolve a default branch (try --branch)"); exitProcess(2)
+    }
+    // current graph: load --graph, else analyze --repo/--project
+    val graph = opts["--graph"]?.let { JsonOutput.read(File(it).readText()) } ?: graphFromOpts(opts).first
+    val range = opts["--range"]
+    val max = opts["--max"]?.toIntOrNull() ?: 50
+    val depth = opts["--depth"]?.toIntOrNull() ?: 3
+    val commits = GitLog.commits(git, branch, if (range == null) max else null, range)
+    System.err.println("impact: ${git.name}@$branch, ${commits.size} commits, depth $depth")
+    val result = Impact.analyze(git, branch, commits, graph, depth)
+    val text = JsonOutput.writeValue(result)
+    val out = opts["--out"]
+    if (out != null) {
+        File(out).writeText(text)
+        @Suppress("UNCHECKED_CAST")
+        val eps = (result["endpointImpact"] as? List<*>)?.size ?: 0
+        System.err.println("wrote $out: ${commits.size} commits, ${result["changedNodeCount"]} changed nodes, $eps impacted endpoints")
+    } else {
+        println(text)
+    }
 }
 
 private fun cmdCombine(opts: Opts) {
@@ -176,6 +238,8 @@ private fun usage() {
         """
         callgraph (Kotlin Analysis API)
           analyze --repo <dir> [--project P] [--out f.json] [--include-other] [--profile p] [--props kv.txt] [--restdocs dir]
+          openapi --repo <dir> [--project P] [--out f.json] [--restdocs dir] [--title T] [--api-version V] [--profile p] [--props kv.txt]
+          impact  --git <repo> (--graph g.json | --repo <dir> --project P) [--branch b] [--max N | --range A..B] [--depth N] [--out f.json]
           combine --graphs a.json,b.json,... | --dir <dir of *.json> [--out f.json]
           search  --method M [--graph g.json | --repo <dir>] [--direction both|callers|callees] [--depth N] [--out f]
           stats   [--graph g.json | --repo <dir>] [--project P] [--profile p]

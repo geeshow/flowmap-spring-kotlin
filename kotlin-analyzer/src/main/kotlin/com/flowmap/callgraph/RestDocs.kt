@@ -65,4 +65,55 @@ object RestDocs {
             null
         }
     }
+
+    // ---- Richer enrichment for OpenAPI (examples) ----
+
+    /** Per-operation REST Docs enrichment used by [OpenApi]. All fields optional. */
+    data class ApiDoc(
+        val description: String?,
+        val requestExample: String?,   // request body example (from http-request.adoc)
+        val responseExample: String?,  // response body example (from http-response.adoc)
+    )
+
+    /**
+     * Like [load], but also harvests example request/response bodies so [OpenApi] can
+     * attach concrete examples. Keyed by (httpMethod, normalizedPath). Absent snippets
+     * just yield nulls — static schema still stands on its own.
+     */
+    fun loadApi(restdocsDir: String?): Map<Pair<String, String>, ApiDoc> {
+        val out = LinkedHashMap<Pair<String, String>, ApiDoc>()
+        val root = restdocsDir?.let { File(it) } ?: return out
+        if (!root.isDirectory) return out
+        root.walkTopDown().filter { it.isFile && it.name == "http-request.adoc" }.forEach { req ->
+            val (verb, path) = parseRequest(req) ?: return@forEach
+            val opDir = req.parentFile
+            out[verb to normalize(path)] = ApiDoc(
+                description = readDescription(opDir) ?: opDir.name,
+                requestExample = bodyOfHttpSnippet(req),
+                responseExample = bodyOfHttpSnippet(File(opDir, "http-response.adoc")),
+            )
+        }
+        return out
+    }
+
+    /**
+     * Extract the message body from an Asciidoctor `http-*.adoc` snippet: the text after
+     * the first blank line inside the `----` listing block. Returns null if absent.
+     */
+    private fun bodyOfHttpSnippet(f: File): String? {
+        if (!f.isFile) return null
+        val lines = try { f.readLines() } catch (_: Exception) { return null }
+        var inBlock = false
+        var sawBlank = false
+        val body = StringBuilder()
+        for (line in lines) {
+            if (line.trim() == "----") {
+                if (!inBlock) { inBlock = true; continue } else break
+            }
+            if (!inBlock) continue
+            if (!sawBlank) { if (line.isBlank()) sawBlank = true; continue }
+            body.appendLine(line)
+        }
+        return body.toString().trim().ifEmpty { null }
+    }
 }

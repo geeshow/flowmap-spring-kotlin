@@ -11,6 +11,21 @@ node-link JSON.
 > 기능/출력/아키텍처는 동일하고, 의미 분석 정확도도 동등(상수 인라인은 오히려 K1
 > `COMPILE_TIME_VALUE`가 직접 제공). `Resolver` 인터페이스 뒤 3파일만 K1 구현이다.
 
+## 기능 한눈에
+
+하나의 PSI/BindingContext 분석 위에서 5개 명령이 동작한다. 모든 산출물의 **공통 키는
+node id(`<fqcn>#<method>`)** 라서 그래프·API 문서·영향도가 서로 조인된다.
+
+| 명령 | 입력 | 산출 | 용도 |
+|---|---|---|---|
+| `analyze` | repo 소스(+`--restdocs`) | node-link 콜그래프 JSON | 단일 서비스 호출/외부호출/리소스 그래프 |
+| `combine` | 서비스별 그래프들 | 통합 그래프(S2S/이벤트 연결) | 서비스 간 호출·Kafka·DB 결합 |
+| `openapi` | repo 소스(+`--restdocs`) | **OpenAPI 3.1 JSON** | 요청/응답 페이로드 스키마 → Redoc/Scalar 웹문서 |
+| `impact` | git repo + 현재 그래프 | 커밋별 **변경 영향도 JSON** | 커밋 변경 → 메서드 → 영향 엔드포인트/서비스 |
+| `search`/`stats` | 그래프 | 서브그래프 / 요약 | 특정 메서드 BFS, 통계 |
+
+> 상세 매뉴얼(명령별 옵션·출력 스키마·웹 연동): [`MANUAL.md`](./MANUAL.md)
+
 ## 무엇이 좋아지나 (Python 대비)
 
 | 케이스 | Python(정규식) | 이 도구(의미분석) |
@@ -43,6 +58,24 @@ gradle wrapper --gradle-version 8.12      # 최초 1회 (래퍼 커밋)
 #   같은 폴더의 description.adoc 한 줄을 설명으로 사용(없으면 폴더명으로 폴백).
 ./gradlew run --args="analyze --repo ../.repo --project user-service --restdocs ../user-service/build/generated-snippets --out /tmp/us.json"
 
+# OpenAPI 3.1 생성: 엔드포인트의 요청/응답 페이로드를 정적 타입에서 스키마로 추출
+#   - @RestController/@Controller 엔드포인트 → paths, DTO(data class) → components/schemas
+#   - K1 BindingContext로 파라미터/반환 타입을 풀 해석(제네릭 List/Map/중첩 DTO/enum 재귀)
+#   - operationId == 그래프 node id(<fqcn>#<method>) 라 콜그래프/문서 상호 링크 유지
+#   - --restdocs 주면 description.adoc → summary, http-request/response.adoc 바디 → example 부착
+#   - --project 생략 시 repo 전체를 한 문서로(서비스별 tag). Redoc/Scalar/Swagger UI에 그대로 투입
+./gradlew run --args="openapi --repo ../.repo --project funding-service --out ./json/funding-service.openapi.json"
+./gradlew run --args="openapi --repo ../.repo --restdocs ../.repo/twice-api/build/generated-snippets --out ./json/twice-api.openapi.json"
+./gradlew run --args="openapi --repo ../.repo --title flowmap-all --out ./json/_openapi.json"
+
+# 변경 영향도(impact): git 커밋의 변경 라인 → 변경 메서드 → 현재 그래프 역방향 BFS
+#   - git CLI로 기본 브랜치(main→master→develop 자동탐지) 커밋 목록 + 커밋별 -U0 헌크
+#   - 변경 .kt를 그 시점 blob 내용으로 PSI 재파싱해 (fqcn#method, 라인범위) 산출 → 헌크와 교집합
+#   - 변경 node id를 현재 분석 그래프에 조인, Bfs(CALLERS)로 영향받는 엔드포인트/서비스 전파
+#   - 산출: commits[](커밋별 변경노드+영향엔드포인트), subgraph(변경+호출자 서브그래프), endpointImpact[](엔드포인트→영향 커밋)
+./gradlew run --args="impact --git ../.repo/tera-cloud-user --graph ./json/tera-cloud-user.json --max 40 --depth 3 --out /tmp/impact.json"
+./gradlew run --args="impact --git ../.repo/<proj> --repo ../.repo --project <proj> --range v1.2.0..HEAD --out /tmp/impact.json"
+
 # cross-run combine: 프로젝트별 그래프를 합쳐 서비스 간 호출(S2S)/이벤트 연결
 #   - Feign/HttpExchange 외부 호출(verb+path)이 다른 서비스 컨트롤러 엔드포인트와
 #     매칭되면 external → s2s 엣지로 재연결 (미매칭 서드파티는 external 유지)
@@ -58,6 +91,8 @@ gradle wrapper --gradle-version 8.12      # 최초 1회 (래퍼 커밋)
 ```
 
 옵션: `analyze --repo --project --out --include-other --profile --props kv.txt --restdocs <snippets-dir>`,
+`openapi --repo --project --out --restdocs <snippets-dir> --title --api-version --profile --props`  (OpenAPI 3.1 JSON 출력; `--project` 생략 시 repo 전체를 서비스 tag로 묶은 단일 문서),
+`impact --git <repo> (--graph g.json | --repo --project) --branch --max N | --range A..B --depth --out`  (커밋 변경 → 메서드 → 영향도; 기본 브랜치 자동탐지),
 `combine --graphs a.json,b.json,... | --dir <dir of *.json> --out`  (`--dir`는 `_*.json` 출력 제외),
 `search --method --graph|--repo --direction both|callers|callees --depth --out`,
 `stats --graph|--repo --project --profile`.
@@ -71,7 +106,11 @@ gradle wrapper --gradle-version 8.12      # 최초 1회 (래퍼 커밋)
   Classify.kt     분류 테이블(layer/async/batch)      ConstantEvaluator.kt 참조/상수/@Value 평가
   Ir.kt           중간표현 + Resolver 인터페이스       ExternalResolver.kt  Feign/RestTemplate/WebClient/HttpExchange
   GraphBuilder.kt IR → CallGraph(엣지/배치/엔드포인트)
+  OpenApi.kt      IR → OpenAPI 3.1(엔드포인트→paths, DTO→schemas)
   Bfs.kt          callers/callees BFS
+  GitLog.kt       git CLI: 커밋/diff 헌크/blob (영향도)
+  PsiSourceParser.kt  파일 텍스트 → (fqcn#method, 라인범위) [PSI, 해석 불필요]
+  Impact.kt       변경라인→메서드→그래프 역방향 BFS 영향도
   YamlPropertyResolver.kt  application*.yml → ${...} 치환
   JsonOutput.kt / Cli.kt
 ```

@@ -39,6 +39,7 @@ data class MethodNode(
     val urlPlaceholder: String?,     // ADDITIVE: raw "${...}" before yml resolution
     val clientPackage: String?,      // ADDITIVE: package of the external client class/interface
     val resourceType: String? = null, // RESOURCE node kind: "kafka-topic" | "redis" | "db-table"
+    val description: String? = null,  // controller endpoint: REST Docs / API description
 ) {
     fun toJson(): LinkedHashMap<String, Any?> = linkedMapOf(
         "id" to id,
@@ -53,6 +54,7 @@ data class MethodNode(
         "externalService" to externalService,
         "externalUrl" to externalUrl,
         "resourceType" to resourceType,
+        "description" to description,
         "urlPlaceholder" to urlPlaceholder,
         "clientPackage" to clientPackage,
         "file" to file,

@@ -9,6 +9,8 @@ package com.flowmap.callgraph
 class GraphBuilder(
     private val files: List<IrFile>,
     private val includeOther: Boolean = false,
+    /** {(httpMethod, normalizedPath) -> description} from REST Docs (see [RestDocs]). */
+    private val descriptions: Map<Pair<String, String>, String> = emptyMap(),
 ) {
     private val typeByFqcn: Map<String, Pair<IrType, IrFile>> =
         files.flatMap { f -> f.types.map { it.fqcn to (it to f) } }.toMap()
@@ -94,7 +96,15 @@ class GraphBuilder(
             module = f.module,
             urlPlaceholder = null,
             clientPackage = null,
+            description = descriptionFor(verb, endpoint),
         )
+    }
+
+    /** REST Docs description for a controller endpoint (verb-specific, else ANY). */
+    private fun descriptionFor(verb: String?, endpoint: String?): String? {
+        if (descriptions.isEmpty() || endpoint == null) return null
+        val np = RestDocs.normalize(endpoint)
+        return descriptions[verb to np] ?: descriptions["ANY" to np]
     }
 
     private fun endpointOf(t: IrType, fn: IrFunction): Pair<String?, String?> {

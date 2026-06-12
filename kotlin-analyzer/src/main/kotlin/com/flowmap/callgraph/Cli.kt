@@ -79,7 +79,11 @@ private fun cmdAnalyze(opts: Opts) {
         profile = opts["--profile"],
         extraProps = loadProps(opts["--props"]),
     )
-    val graph = GraphBuilder(files, includeOther = opts.has("--include-other")).build()
+    val descriptions = RestDocs.load(opts["--restdocs"])
+    if (opts["--restdocs"] != null) {
+        System.err.println("restdocs: loaded ${descriptions.size} API descriptions from ${opts["--restdocs"]}")
+    }
+    val graph = GraphBuilder(files, includeOther = opts.has("--include-other"), descriptions = descriptions).build()
     val meta = linkedMapOf<String, Any?>(
         "command" to "analyze", "repo" to repo, "project" to opts["--project"],
         "profile" to opts["--profile"], "files" to files.size,
@@ -171,7 +175,7 @@ private fun usage() {
     System.err.println(
         """
         callgraph (Kotlin Analysis API)
-          analyze --repo <dir> [--project P] [--out f.json] [--include-other] [--profile p] [--props kv.txt]
+          analyze --repo <dir> [--project P] [--out f.json] [--include-other] [--profile p] [--props kv.txt] [--restdocs dir]
           combine --graphs a.json,b.json,... | --dir <dir of *.json> [--out f.json]
           search  --method M [--graph g.json | --repo <dir>] [--direction both|callers|callees] [--depth N] [--out f]
           stats   [--graph g.json | --repo <dir>] [--project P] [--profile p]

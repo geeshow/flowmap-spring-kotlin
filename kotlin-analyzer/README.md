@@ -21,7 +21,7 @@ node-link JSON.
 | 오버로드/확장함수/암시적 receiver 호출 | 부정확 | 심볼 해석으로 정확 |
 | 외부 노드에 패키지 | 없음 | `clientPackage` 추가 |
 
-추가 JSON 키(기존 계약에 **additive**): `urlPlaceholder`(원본 `${...}`), `clientPackage`, `resourceType`(RESOURCE 노드 종류: `kafka-topic`|`redis`|`db-table`).
+추가 JSON 키(기존 계약에 **additive**): `urlPlaceholder`(원본 `${...}`), `clientPackage`, `resourceType`(RESOURCE 노드 종류: `kafka-topic`|`redis`|`db-table`), `description`(컨트롤러 엔드포인트 REST Docs 설명).
 
 **인프라 리소스 탐지**(Python 도구와 동등): `@Entity`/`@Table` + `JpaRepository<E,Id>` → `db:table:*` 노드, `KafkaTemplate.send("topic")`/`@KafkaListener` → `kafka:*` 토픽 노드(produce/consume 엣지), `RedisTemplate`/`JdbcTemplate` → `redis`/`db:jdbc` 노드. 토픽 노드 id가 서비스 간 공유되므로 `combine`에서 이벤트 흐름이 자동으로 이어진다.
 
@@ -35,6 +35,11 @@ gradle wrapper --gradle-version 8.12      # 최초 1회 (래퍼 커밋)
 # 분석 → node-link JSON
 ./gradlew run --args="analyze --repo ../.repo --project sample-shop --out /tmp/shop.json"
 ./gradlew run --args="analyze --repo ../.repo --project <your-project> --profile local --out /tmp/out.json"
+
+# REST Docs 설명 부착: 엔드포인트에 한글/API 설명을 붙임 (s2s 엣지에도 전파됨)
+#   build/generated-snippets/<op>/http-request.adoc 에서 (verb, path)를 읽고
+#   같은 폴더의 description.adoc 한 줄을 설명으로 사용(없으면 폴더명으로 폴백).
+./gradlew run --args="analyze --repo ../.repo --project user-service --restdocs ../user-service/build/generated-snippets --out /tmp/us.json"
 
 # cross-run combine: 프로젝트별 그래프를 합쳐 서비스 간 호출(S2S)/이벤트 연결
 #   - Feign/HttpExchange 외부 호출(verb+path)이 다른 서비스 컨트롤러 엔드포인트와
@@ -50,7 +55,7 @@ gradle wrapper --gradle-version 8.12      # 최초 1회 (래퍼 커밋)
 ./gradlew run --args="stats --graph /tmp/shop.json"
 ```
 
-옵션: `analyze --repo --project --out --include-other --profile --props kv.txt`,
+옵션: `analyze --repo --project --out --include-other --profile --props kv.txt --restdocs <snippets-dir>`,
 `combine --graphs a.json,b.json,... | --dir <dir of *.json> --out`  (`--dir`는 `_*.json` 출력 제외),
 `search --method --graph|--repo --direction both|callers|callees --depth --out`,
 `stats --graph|--repo --project --profile`.

@@ -37,6 +37,7 @@ object JsonOutput {
                 urlPlaceholder = n.str("urlPlaceholder"),
                 clientPackage = n.str("clientPackage"),
                 resourceType = n.str("resourceType"),
+                description = n.str("description"),
             )
         }
         val edges = root["edges"].map { e ->

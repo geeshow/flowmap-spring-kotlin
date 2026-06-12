@@ -23,6 +23,8 @@ node-link JSON.
 
 추가 JSON 키(기존 계약에 **additive**): `urlPlaceholder`(원본 `${...}`), `clientPackage`, `resourceType`(RESOURCE 노드 종류: `kafka-topic`|`redis`|`db-table`), `description`(컨트롤러 엔드포인트 REST Docs 설명).
 
+**노드 id 규약**: `<fqcn>#<method>`. Kotlin 합성 `.Companion` 세그먼트는 제거해 companion 메서드를 enclosing 클래스에 귀속(Java static·Python 도구와 동일). 중첩 클래스 표기(`Outer.Inner`)는 충돌 방지를 위해 **보존**(Python은 평탄화). 선언 노드와 호출 타깃 양쪽에 동일 적용돼 엣지 연결이 유지된다.
+
 **인프라 리소스 탐지**(Python 도구와 동등): `@Entity`/`@Table` + `JpaRepository<E,Id>` → `db:table:*` 노드, `KafkaTemplate.send("topic")`/`@KafkaListener` → `kafka:*` 토픽 노드(produce/consume 엣지), `RedisTemplate`/`JdbcTemplate` → `redis`/`db:jdbc` 노드. 토픽 노드 id가 서비스 간 공유되므로 `combine`에서 이벤트 흐름이 자동으로 이어진다.
 
 ## 빌드 & 실행

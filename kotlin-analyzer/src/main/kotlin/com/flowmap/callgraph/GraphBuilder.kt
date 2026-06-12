@@ -37,7 +37,7 @@ class GraphBuilder(
             for (fn in t.functions) {
                 val nl = nodeLayer(layer, fn)
                 if (!tracked(nl)) continue
-                val fromId = "${t.fqcn}#${fn.name}"
+                val fromId = nid(t.fqcn, fn.name)
                 for (call in fn.calls) resolveCall(call, fromId, f)
                 if (isBatchBean(fn)) wireBatch(t, fn, f, fromId)
                 wireKafka(fn, f, fromId)
@@ -74,13 +74,27 @@ class GraphBuilder(
         else -> true
     }
 
+    // ---- node id construction ----
+
+    /**
+     * Drop the synthetic Kotlin `.Companion` segment so a companion-object method
+     * is attributed to its enclosing class (matching Java statics and the Python
+     * tool). Nested-class nesting is intentionally preserved — flattening it would
+     * collide distinct nested types. Applied to BOTH declared node ids and call
+     * target ids so edges stay connected; map keys (typeByFqcn/layerOfType) keep
+     * the full fqcn for resolution.
+     */
+    private fun normalizeFqcn(fqcn: String): String = fqcn.removeSuffix(".Companion")
+
+    private fun nid(fqcn: String, method: String): String = "${normalizeFqcn(fqcn)}#$method"
+
     // ---- node construction ----
 
     private fun makeNode(t: IrType, fn: IrFunction, f: IrFile, typeLayer: Layer): MethodNode {
         val (verb, endpoint) = endpointOf(t, fn)
         return MethodNode(
-            id = "${t.fqcn}#${fn.name}",
-            fqcn = t.fqcn,
+            id = nid(t.fqcn, fn.name),
+            fqcn = normalizeFqcn(t.fqcn),
             method = fn.name,
             layer = nodeLayer(typeLayer, fn),
             visibility = fn.visibility,
@@ -134,7 +148,7 @@ class GraphBuilder(
     private fun resolveCall(call: IrCall, fromId: String, f: IrFile) {
         when (val r = call.resolution) {
             is CallResolution.Internal -> {
-                val tid = "${r.calleeFqcn}#${r.calleeMethod}"
+                val tid = nid(r.calleeFqcn, r.calleeMethod)
                 if (tid !in nodes) ensureProjectNode(r.calleeFqcn, r.calleeMethod)
                 emit(fromId, tid, asyncMode(call.inAsyncCtx, r.calleeIsAsync),
                     EdgeKind.INTERNAL, "call", f, call.line)
@@ -163,7 +177,7 @@ class GraphBuilder(
             is CallResolution.RepositoryInherited -> {
                 if (layerOfType[r.receiverFqcn] != Layer.REPOSITORY) return
                 if (r.method !in Classify.REPOSITORY_INHERITED_METHODS) return
-                val tid = "${r.receiverFqcn}#${r.method}"
+                val tid = nid(r.receiverFqcn, r.method)
                 addNode(repoInheritedNode(r.receiverFqcn, r.method))
                 emit(fromId, tid, asyncMode(call.inAsyncCtx), EdgeKind.INTERNAL, "call", f, call.line)
             }
@@ -190,7 +204,7 @@ class GraphBuilder(
     private fun repoInheritedNode(fqcn: String, method: String): MethodNode {
         val f = typeByFqcn[fqcn]?.second
         return MethodNode(
-            id = "$fqcn#$method", fqcn = fqcn, method = method, layer = Layer.REPOSITORY,
+            id = nid(fqcn, method), fqcn = normalizeFqcn(fqcn), method = method, layer = Layer.REPOSITORY,
             visibility = "public", isAsync = false, returnType = null, httpMethod = null,
             endpoint = null, externalService = null, externalUrl = null, file = f?.path, line = null,
             project = f?.project, module = f?.module, urlPlaceholder = null, clientPackage = null,
@@ -203,7 +217,7 @@ class GraphBuilder(
         val siblings = t.functions.associateBy { it.name }
         for ((relation, beanName) in fn.batchWiring) {
             val target = siblings[beanName] ?: continue
-            val tid = "${t.fqcn}#${target.name}"
+            val tid = nid(t.fqcn, target.name)
             if (tid !in nodes) addNode(makeNode(t, target, f, layerOfType.getValue(t.fqcn)))
             emit(fromId, tid, CallMode.ASYNC, EdgeKind.BATCH, relation, f, fn.line)
         }

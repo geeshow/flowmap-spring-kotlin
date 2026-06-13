@@ -156,9 +156,12 @@ private fun cmdRefresh(opts: Opts) {
     val allOapi = OpenApi.build(allFiles, title = opts["--title"] ?: "flowmap-all")
     File(outDir, "_openapi.json").writeText(JsonOutput.writeValue(allOapi))
 
+    // 5) lightweight manifest (additive — leaves _combined.json and friends intact)
+    val manifestCount = Manifest.write(outDir)
+
     @Suppress("UNCHECKED_CAST")
     val paths = (allOapi["paths"] as? Map<String, *>)?.size ?: 0
-    System.err.println("refresh done: ${liveBases.size} projects, combined ${combined.nodes.size} nodes / $s2s s2s, openapi $paths paths -> ${outDir.path}")
+    System.err.println("refresh done: ${liveBases.size} projects, combined ${combined.nodes.size} nodes / $s2s s2s, openapi $paths paths, manifest $manifestCount projects -> ${outDir.path}")
 }
 
 private fun cmdOpenApi(opts: Opts) {
@@ -247,6 +250,16 @@ private fun cmdCombine(opts: Opts) {
     )
     dump(result, opts["--out"], meta)
     System.err.println("combined ${usable.size} graphs: ${result.nodes.size} nodes, ${result.edges.size} edges, $s2s s2s, $gw gateway")
+
+    // Lightweight manifest (additive). Target the output directory: parent of
+    // --out if given, else the scanned --dir, else the cwd.
+    val manifestDir = opts["--out"]?.let { File(it).absoluteFile.parentFile }
+        ?: opts["--dir"]?.let { File(it) }
+        ?: File(".")
+    if (manifestDir.isDirectory) {
+        val n = Manifest.write(manifestDir)
+        System.err.println("manifest: ${manifestDir.path}/_manifest.json ($n projects)")
+    }
 }
 
 /** Graph inputs for `combine`: explicit `--graphs` CSV, and/or every `*.json` under `--dir`. */

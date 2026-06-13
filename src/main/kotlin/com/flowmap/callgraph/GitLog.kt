@@ -56,6 +56,33 @@ object GitLog {
     /** Currently checked-out branch (the "selected" branch), or "HEAD" if detached. */
     fun currentBranch(repo: File): String = run(repo, "rev-parse", "--abbrev-ref", "HEAD").trim()
 
+    /** The `origin` remote URL, or null if there is no `origin` remote. */
+    fun remoteUrl(repo: File): String? =
+        run(repo, "remote", "get-url", "origin").trim().ifEmpty { null }
+
+    /** Web base URL for this repo's `origin` (e.g. `https://github.com/owner/repo`), or null. */
+    fun webBaseUrl(repo: File): String? = remoteUrl(repo)?.let { toWebBase(it) }
+
+    /**
+     * Normalize a git remote URL to its https web base (no trailing `.git`),
+     * handling scp-style (`git@host:owner/repo.git`), `ssh://`, and `http(s)://`
+     * forms and stripping any embedded credentials. Returns null when it cannot be
+     * turned into an https URL. Pure (no git invocation) so it is unit-testable.
+     */
+    fun toWebBase(remote: String): String? {
+        var u = remote.trim()
+        if (u.isEmpty()) return null
+        u = when {
+            u.startsWith("git@") -> "https://" + u.removePrefix("git@").replaceFirst(":", "/")
+            u.startsWith("ssh://") -> "https://" + u.removePrefix("ssh://")
+            u.startsWith("http://") -> "https://" + u.removePrefix("http://")
+            u.startsWith("https://") -> u
+            else -> return null
+        }
+        u = u.replaceFirst(Regex("^https://[^/@]+@"), "https://")   // strip user[:token]@ credentials
+        return u.trimEnd('/').removeSuffix(".git").ifEmpty { null }
+    }
+
     /** Fast-forward pull the current branch. Returns (ok, trimmed combined output). */
     fun pull(repo: File): Pair<Boolean, String> {
         val (out, code) = runWithCode(repo, "pull", "--ff-only")
@@ -99,6 +126,10 @@ object GitLog {
             )
         }.toList()
     }
+
+    /** First parent of [sha] (the base side of a PR merge), or null if absent/root. */
+    fun firstParent(repo: File, sha: String): String? =
+        run(repo, "rev-parse", "--verify", "--quiet", "$sha^1").trim().ifEmpty { null }
 
     /** Per-file new-side changed line ranges for [sha] vs its first parent. */
     fun changesIn(repo: File, sha: String): List<FileChange> =

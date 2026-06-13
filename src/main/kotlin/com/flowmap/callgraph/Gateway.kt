@@ -30,6 +30,9 @@ object Gateway {
         val filters: String,          // human summary, e.g. "StripPrefix=2"
     )
 
+    /** A named gateway and its routes (one per Spring Cloud Gateway instance). */
+    data class Source(val name: String, val routes: List<Route>)
+
     fun load(path: String?, gatewayName: String): List<Route> {
         val f = path?.let { File(it) } ?: return emptyList()
         if (!f.isFile) return emptyList()
@@ -38,14 +41,40 @@ object Gateway {
         return list.mapIndexedNotNull { i, raw -> (raw as? Map<*, *>)?.let { parseRoute(it, i) } }
     }
 
+    /**
+     * Auto-discover a project's gateway routes by scanning its resource YAMLs for a
+     * `spring.cloud.gateway.routes` list (STRICT — a bare top-level `routes:` or a
+     * root list is NOT accepted here, to avoid mis-reading non-gateway YAMLs during
+     * a blind scan). Covers gateways that keep routes locally in `application*.yml`
+     * AND externalized gateways whose Config-Server routes were exported into the
+     * project's resources. Routes are merged across files, deduped by id.
+     */
+    fun discover(projectDir: File): List<Route> {
+        if (!projectDir.isDirectory) return emptyList()
+        val routes = LinkedHashMap<String, Route>()
+        projectDir.walkTopDown()
+            .onEnter { it.name !in SCAN_SKIP_DIRS }
+            .filter { it.isFile && (it.extension == "yml" || it.extension == "yaml") }
+            .forEach { f ->
+                val root = try { Yaml().load<Any?>(f.readText()) } catch (_: Exception) { return@forEach }
+                val list = locateRoutes(root, strict = true) ?: return@forEach
+                list.mapIndexedNotNull { i, raw -> (raw as? Map<*, *>)?.let { parseRoute(it, i) } }
+                    .forEach { routes.putIfAbsent(it.routeId, it) }
+            }
+        return routes.values.toList()
+    }
+
+    private val SCAN_SKIP_DIRS = setOf("build", "out", ".git", ".gradle", ".kotlin", "node_modules", "target")
+
     @Suppress("UNCHECKED_CAST")
-    private fun locateRoutes(root: Any?): List<*>? {
-        if (root is List<*>) return root
+    private fun locateRoutes(root: Any?, strict: Boolean = false): List<*>? {
         var node: Any? = root
         for (k in listOf("spring", "cloud", "gateway", "routes")) {
             node = (node as? Map<*, *>)?.get(k) ?: break
             if (node is List<*>) return node
         }
+        if (strict) return null
+        if (root is List<*>) return root
         (root as? Map<*, *>)?.get("routes")?.let { if (it is List<*>) return it }
         return null
     }

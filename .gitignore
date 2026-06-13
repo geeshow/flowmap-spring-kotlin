@@ -12,10 +12,11 @@ out/
 .DS_Store
 
 # --- generated analysis output ------------------------------------------------
-# graph.json embeds analyzed-project internals (package names, file paths,
-# resolved internal URLs) — never publish it.
+# Analysis output embeds analyzed-project internals (package names, file paths,
+# resolved internal URLs) — never publish it. `refresh` writes into ./json/.
 graph.json
 *.graph.json
+/json/
 
 # --- analyzed source projects -------------------------------------------------
 # .repo/ holds the code being analyzed. Only the bundled DEMO projects are
@@ -31,10 +32,3 @@ graph.json
 !/.repo/bank-broker/
 
 # (gradle wrapper jar IS tracked — do not add a global *.jar ignore)
-
-# python
-__pycache__/
-*.pyc
-
-# flowmap registry (analysis output; may contain internal endpoints)
-.flowmap/

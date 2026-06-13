@@ -126,46 +126,53 @@ flowchart LR
 핵심: `order-service`와 `notification-service`가 **각각 따로 분석돼도** 둘 다
 `user-service.getUser`로 S2S 연결되고, `order-service`가 발행한 `order.created` 이벤트가
 `notification-service`로 이어집니다(크로스-런 레지스트리). REST Docs가 있으면 엔드포인트에
-한글 설명(`«사용자 단건 조회»`)까지 붙습니다. 자세한 사용법은 [`callgraph/README.md`](callgraph/README.md)의 "MSA" 절 참고.
+한글 설명(`«사용자 단건 조회»`)까지 붙습니다. 자세한 사용법은 [`MANUAL.md`](MANUAL.md)의 "MSA" 절 참고.
 
 ---
 
-## 두 가지 구현
+## 분석기
 
-같은 node-link JSON 계약을 만족하는 두 구현이 있습니다. 목적에 따라 고르세요.
+분석기는 이 저장소 **루트의 독립 Gradle 프로젝트**입니다. Kotlin 컴파일러 K1
+프론트엔드(PSI + BindingContext)로 의미 분석을 하기 때문에 상수/`object`/`@Value`/`${...}`
+참조를 따라가 **외부 API 실제 URL까지 정확히** 해석하고, 호출 해석도 심볼 기반(오버로드·
+확장함수·암시적 receiver)으로 정확합니다. 분석 대상 소스는 `.repo/`에 둡니다.
 
-| | [`callgraph/`](callgraph/) — **Python** | [`kotlin-analyzer/`](kotlin-analyzer/) — **Kotlin** |
-|---|---|---|
-| 방식 | 정규식 + 중괄호 추적 휴리스틱 | 컴파일러 프론트엔드(PSI + BindingContext) 의미 분석 |
-| 의존성 | 없음(순수 stdlib), 오프라인 즉시 실행 | `kotlin-compiler-embeddable`(Maven Central) |
-| 강점 | 빠르고 설치 불필요, 부분 소스에서도 동작 | **상수/`object`/`@Value`/`${...}` 참조를 따라가 외부 API 실제 URL까지 정확히 해석** |
-| 호출 해석 | 타입 휴리스틱(DI 필드/지역변수) | 심볼 해석(오버로드·확장함수·암시적 receiver까지 정확) |
+> 과거의 Python 휴리스틱 구현(`callgraph/`)과 초기 ASM 바이트코드 버전은 제거됐습니다.
 
-> 빠른 개요/그래프 형태만 보려면 Python, **외부 API URL을 정확히** 뽑으려면 Kotlin을 쓰세요.
+### 명령 한눈에
+
+모든 산출물의 **공통 키는 node id(`<fqcn>#<method>`)** 라서 그래프·API 문서·영향도가 서로 조인됩니다.
+
+| 명령 | 입력 | 산출 | 용도 |
+|---|---|---|---|
+| **`refresh`** | `.repo`(git) | **위 산출물 일괄 + impact** | **pull + 전 프로젝트 분석/openapi/impact/combine/manifest 한 방에 (권장)** |
+| `analyze` | repo 소스(+`--restdocs`) | node-link 콜그래프 JSON | 단일 서비스 호출/외부호출/리소스 그래프 |
+| `openapi` | repo 소스(+`--restdocs`) | OpenAPI 3.1 JSON | 요청/응답 스키마 → Redoc/Scalar 웹문서 |
+| `impact` | git repo + 그래프 | 커밋별 변경 영향도 JSON | 커밋 변경 → 메서드 → 영향 엔드포인트/서비스 |
+| `combine` | 서비스별 그래프들 | 통합 그래프(S2S/이벤트) | 서비스 간 호출·Kafka·DB 결합 |
+| `search`/`stats` | 그래프 | 서브그래프 / 요약 | 특정 메서드 BFS, 통계 |
 
 ---
 
 ## 빠른 시작
 
-### Python (`callgraph/`)
-
 ```bash
-python3 -m callgraph analyze --repo .repo --out graph.json
-python3 -m callgraph search --graph graph.json --method placeOrder --direction both --depth 3
-python3 -m callgraph stats  --graph graph.json
-```
-
-### Kotlin (`kotlin-analyzer/`)
-
-```bash
-cd kotlin-analyzer
 ./gradlew build
-./gradlew run --args="analyze --repo ../.repo --project sample-shop --out /tmp/shop.json"
+
+# ── 한 방에 전부 (권장) ────────────────────────────────────────────
+# .repo의 모든 프로젝트를 최신화(pull)한 뒤, 가능한 모든 분석을 한 번에:
+#   호출그래프 + OpenAPI + RestDocs 보강 + 커밋(impact) + combine(게이트웨이 자동발견) + manifest
+# 기본 --repo 는 .repo, 기본 --out-dir 는 ./json
+./gradlew run --args="refresh"
+./gradlew run --args="refresh --no-pull"          # pull 없이 재분석만
+./gradlew run --args="refresh --no-impact"        # 커밋 분석 생략
+
+# ── 개별 분석 (디버깅/단발성) ───────────────────────────────────────
+./gradlew run --args="analyze --project sample-shop --out /tmp/shop.json"
 ./gradlew run --args="search --method placeOrder --graph /tmp/shop.json --direction both"
 ```
 
-자세한 옵션/스키마/설계는 각 디렉토리의 README를 보세요:
-[`callgraph/README.md`](callgraph/README.md) · [`kotlin-analyzer/README.md`](kotlin-analyzer/README.md).
+자세한 옵션/스키마/설계는 [`MANUAL.md`](MANUAL.md)를 보세요.
 
 ---
 
@@ -184,8 +191,9 @@ cd kotlin-analyzer
 - **`.repo/order-service`·`user-service`·`notification-service`** — MSA 데모(서버 간 S2S 호출, Kafka 이벤트, Redis/DB, REST Docs 설명)
 
 분석하려는 실제 프로젝트는 `.repo/<your-project>/`에 넣으면 됩니다. `.gitignore`가
-이 데모들 외의 `.repo/*`, 그리고 **분석 산출물**(`graph.json`, `.flowmap/`)을
+이 데모들 외의 `.repo/*`, 그리고 **분석 산출물**(`graph.json` 등)을
 **커밋에서 제외**합니다 — 사내/외부 소스나 결과물이 실수로 공개되지 않도록.
+(분석기 산출물은 `./json/`에 쌓입니다.)
 
 ---
 
@@ -216,20 +224,21 @@ cd kotlin-analyzer
 
 노드에는 이 외에 `resourceType`(Kafka/Redis/DB 노드), `description`(API 한글 설명) 키가
 있고, MSA/S2S·Kafka·DB·Redis·레지스트리(`.flowmap/registry.json`) 산출물까지 포함한
-**전체 스키마는 [`callgraph/README.md`](callgraph/README.md)의 "산출물 스키마 (상세)"** 절에 정리돼 있습니다.
-Kotlin 구현은 외부 노드에 추가로 `urlPlaceholder`(원본 `${...}`)·`clientPackage`를 채웁니다.
+**전체 스키마는 [`MANUAL.md`](MANUAL.md)의 "산출물 스키마 (상세)"** 절에 정리돼 있습니다.
+분석기는 외부 노드에 추가로 `urlPlaceholder`(원본 `${...}`)·`clientPackage`를 채웁니다.
 
 ---
 
 ## 디렉토리 구조
 
 ```
-flowmap-spring-kotlin/
-├── callgraph/              # Python 구현 (순수 stdlib)
-├── kotlin-analyzer/        # Kotlin 구현 (kotlin-compiler-embeddable, K1 프론트엔드)
-├── .repo/sample-shop/      # 데모용 샘플 Spring Kotlin 프로젝트
-├── *.kt, schema.sql        # 초기 ASM 바이트코드 기반 버전(레거시)
-└── README-legacy-kotlin-asm.md
+flowmap-spring-kotlin/          # 분석기 = 이 저장소 루트 (kotlin-compiler-embeddable, K1 프론트엔드)
+├── build.gradle.kts            # 분석기 Gradle 프로젝트
+├── settings.gradle.kts
+├── src/main/kotlin/com/flowmap/callgraph/   # 분석기 소스
+├── MANUAL.md                   # 명령별 옵션 · 출력 스키마 · 웹 연동 상세
+├── json/                       # refresh 산출물 (gitignored)
+└── .repo/<프로젝트>/           # 분석 대상 소스 (sample-shop 등 데모 번들)
 ```
 
 ## 라이선스

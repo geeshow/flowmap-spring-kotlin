@@ -18,7 +18,7 @@ package com.flowmap.callgraph
  */
 object CrossRun {
 
-    fun combine(graphs: List<CallGraph>, gatewayRoutes: List<Gateway.Route> = emptyList(), gatewayName: String = "gateway"): CallGraph {
+    fun combine(graphs: List<CallGraph>, gateways: List<Gateway.Source> = emptyList()): CallGraph {
         // 1) union nodes (first-seen wins) and edges (dedup by key)
         val nodes = LinkedHashMap<String, MethodNode>()
         for (g in graphs) for (n in g.nodes) nodes.putIfAbsent(n.id, n)
@@ -43,7 +43,7 @@ object CrossRun {
 
         // 4) gateway pass: a GATEWAY node per route + `gateway` edges to the routed
         //    backend service's endpoints (frontend prefix vs server path made visible).
-        wireGateways(gatewayRoutes, gatewayName, providers, nodes, newEdges)
+        wireGateways(gateways, providers, nodes, newEdges)
 
         // 5) drop external stubs that no surviving edge references anymore
         val referenced = HashSet<String>()
@@ -55,14 +55,14 @@ object CrossRun {
     // ---- gateway routing ----
 
     private fun wireGateways(
-        routes: List<Gateway.Route>, gatewayName: String, providers: List<MethodNode>,
+        gateways: List<Gateway.Source>, providers: List<MethodNode>,
         nodes: LinkedHashMap<String, MethodNode>, edges: LinkedHashMap<List<Any?>, CallEdge>,
     ) {
-        if (routes.isEmpty()) return
+        if (gateways.isEmpty()) return
         val byProject = providers.groupBy { it.project }
-        for (route in routes) {
-            val gwId = "gateway:$gatewayName#${route.routeId}"
-            nodes.putIfAbsent(gwId, gatewayNode(gwId, gatewayName, route))
+        for (gw in gateways) for (route in gw.routes) {
+            val gwId = "gateway:${gw.name}#${route.routeId}"
+            nodes.putIfAbsent(gwId, gatewayNode(gwId, gw.name, route))
             val svc = matchService(route.targetService, byProject.keys) ?: continue
             val bp = route.backendPrefix
             for (ep in byProject[svc].orEmpty()) {

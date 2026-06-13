@@ -41,6 +41,18 @@ object GitLog {
     fun isRepo(repo: File): Boolean =
         run(repo, "rev-parse", "--is-inside-work-tree").trim() == "true"
 
+    /**
+     * True only when [repo] is its OWN git work-tree root — not merely nested
+     * inside an enclosing repo. Used by `refresh` so bundled demo projects that
+     * live inside the analyzer's repo (no `.git` of their own) are NOT pulled or
+     * mined against the enclosing repo's unrelated history.
+     */
+    fun isRepoRoot(repo: File): Boolean {
+        val top = run(repo, "rev-parse", "--show-toplevel").trim()
+        if (top.isEmpty()) return false
+        return File(top).canonicalFile == repo.canonicalFile
+    }
+
     /** Currently checked-out branch (the "selected" branch), or "HEAD" if detached. */
     fun currentBranch(repo: File): String = run(repo, "rev-parse", "--abbrev-ref", "HEAD").trim()
 

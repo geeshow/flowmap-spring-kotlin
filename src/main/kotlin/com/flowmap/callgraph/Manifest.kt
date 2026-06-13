@@ -47,15 +47,48 @@ object Manifest {
                 !f.name.endsWith(".join.json") && !f.name.endsWith(".screens.json")
         }?.sortedBy { it.name } ?: emptyList()
 
-    /** Read `meta.nodes`/`meta.edges`, falling back to the nodes/edges array lengths. */
-    private fun nodeEdgeCounts(graphFile: File): Pair<Int, Int> {
+    /** Frontend-only node layers — their presence marks a graph as a frontend graph. */
+    private val FRONTEND_LAYERS = setOf("SCREEN", "HOOK", "STORE", "API")
+
+    /**
+     * True if [graphFile] is a frontend (ts-analyzer) graph — any node carries a
+     * frontend-only layer. Used by `refresh` to avoid pruning frontend artifacts
+     * from a shared output dir. Unreadable/non-graph files read as non-frontend.
+     */
+    fun isFrontendGraph(graphFile: File): Boolean = try {
+        mapper.readTree(graphFile.readText())["nodes"]?.takeIf { it.isArray }
+            ?.any { it["layer"]?.asText() in FRONTEND_LAYERS } ?: false
+    } catch (_: Exception) { false }
+
+    /**
+     * One manifest entry for a `<base>.json` graph. Type is detected from node
+     * layers (so a shared output dir holding BOTH backend and frontend graphs is
+     * catalogued correctly regardless of which tool wrote the manifest last), and
+     * every sibling that exists on disk is linked (`openapi`/`impact` for backend,
+     * `join`/`screens` for frontend).
+     */
+    private fun entryFor(dir: File, graphFile: File): LinkedHashMap<String, Any?> {
+        val base = graphFile.name.removeSuffix(".json")
         val root = mapper.readTree(graphFile.readText())
         val meta = root["meta"]
-        val nodes = meta?.get("nodes")?.takeIf { it.isNumber }?.asInt()
-            ?: (root["nodes"]?.takeIf { it.isArray }?.size() ?: 0)
+        val nodesArr = root["nodes"]?.takeIf { it.isArray }
+        val nodes = meta?.get("nodes")?.takeIf { it.isNumber }?.asInt() ?: (nodesArr?.size() ?: 0)
         val edges = meta?.get("edges")?.takeIf { it.isNumber }?.asInt()
             ?: (root["edges"]?.takeIf { it.isArray }?.size() ?: 0)
-        return nodes to edges
+        val isFrontend = nodesArr?.any { it["layer"]?.asText() in FRONTEND_LAYERS } ?: false
+        fun sibling(suffix: String) = File(dir, "$base.$suffix").takeIf { it.isFile }?.name
+        return linkedMapOf(
+            "name" to base,
+            "type" to if (isFrontend) "frontend" else "backend",
+            "graph" to graphFile.name,
+            "openapi" to sibling("openapi.json"),
+            "impact" to sibling("impact.json"),
+            "join" to sibling("join.json"),
+            "screens" to sibling("screens.json"),
+            "nodes" to nodes,
+            "edges" to edges,
+            "generated" to iso(Instant.ofEpochMilli(graphFile.lastModified())),
+        )
     }
 
     /**
@@ -63,24 +96,7 @@ object Manifest {
      * `_manifest.json` into it. Returns the number of project entries written.
      */
     fun write(dir: File): Int {
-        val projects = projectGraphFiles(dir).map { graphFile ->
-            val base = graphFile.name.removeSuffix(".json")
-            val openapi = File(dir, "$base.openapi.json").takeIf { it.isFile }?.name
-            val impact = File(dir, "$base.impact.json").takeIf { it.isFile }?.name
-            val (nodes, edges) = nodeEdgeCounts(graphFile)
-            linkedMapOf<String, Any?>(
-                "name" to base,
-                "type" to "backend",
-                "graph" to graphFile.name,
-                "openapi" to openapi,
-                "impact" to impact,
-                "join" to null,
-                "screens" to null,
-                "nodes" to nodes,
-                "edges" to edges,
-                "generated" to iso(Instant.ofEpochMilli(graphFile.lastModified())),
-            )
-        }
+        val projects = projectGraphFiles(dir).map { entryFor(dir, it) }
         val manifest = linkedMapOf<String, Any?>(
             "version" to 1,
             "generated" to iso(Instant.now()),

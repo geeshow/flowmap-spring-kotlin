@@ -146,12 +146,18 @@ private fun cmdRefresh(opts: Opts) {
         System.err.println("  + ${p.name}: ${graph.nodes.size} nodes, ${graph.edges.size} edges")
     }
 
-    // 3) prune ghost outputs for projects no longer present/sourced
+    // 3) prune ghost BACKEND outputs for projects no longer present/sourced.
+    //    Leave frontend artifacts (ts-analyzer *.join.json/*.screens.json and
+    //    frontend graphs) untouched so a SHARED output dir is safe to refresh.
     outDir.listFiles { f ->
-        f.isFile && f.name.endsWith(".json") && !f.name.startsWith("_")
+        f.isFile && f.name.endsWith(".json") && !f.name.startsWith("_") &&
+            !f.name.endsWith(".join.json") && !f.name.endsWith(".screens.json")
     }?.forEach { f ->
+        val isBackendSibling = f.name.endsWith(".openapi.json") || f.name.endsWith(".impact.json")
         val base = f.name.removeSuffix(".impact.json").removeSuffix(".openapi.json").removeSuffix(".json")
-        if (base !in liveBases) { f.delete(); System.err.println("  ~ pruned ghost ${f.name}") }
+        if (base in liveBases) return@forEach
+        if (!isBackendSibling && Manifest.isFrontendGraph(f)) return@forEach  // a frontend graph, not a ghost
+        f.delete(); System.err.println("  ~ pruned ghost ${f.name}")
     }
 
     // 4) combine (in-memory) + repo-wide OpenAPI.

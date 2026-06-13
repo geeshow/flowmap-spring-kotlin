@@ -107,6 +107,35 @@ git 접근은 외부 의존성 없이 `git` CLI를 호출**한다(버전 안정)
 job→step→reader/processor/writer / Kafka produce·consume / Redis·JDBC / JPA 테이블 /
 Spring Data 상속 메서드(save/findById…).
 
+### 3.1.1 `refresh` — pull + 전체 일괄 갱신
+
+`.repo`의 각 프로젝트를 **현재 체크아웃된 브랜치로 pull**한 뒤, 전 프로젝트를 재분석해
+`<p>.json` / `<p>.openapi.json` 와 통합 산출물(`_combined.json`, `_openapi.json`)을 한 번에
+갱신한다. 소스 pull 후 "다시 분석" 워크플로를 한 명령으로 묶은 것.
+
+| 옵션 | 설명 |
+|---|---|
+| `--repo <dir>` | 프로젝트들이 있는 루트(기본 `../.repo`) |
+| `--out-dir <dir>` | 산출물 디렉터리(기본 `./json`) |
+| `--no-pull` | git pull 생략(재분석만) |
+| `--include-other` / `--profile` / `--props` | analyze와 동일 |
+| `--title <T>` | repo 전체 `_openapi.json`의 `info.title`(기본 `flowmap-all`) |
+
+동작:
+1. 각 프로젝트 디렉터리가 git work tree면 `git pull --ff-only`(현재 브랜치). git이 아니면 pull 스킵.
+   `--restdocs`는 `<project>/build/generated-snippets`가 있으면 자동 사용.
+2. 프로젝트당 **1회 분석**으로 콜그래프와 OpenAPI를 함께 생성(소스가 없는 디렉터리는 건너뜀 → 고스트 없음).
+3. `--out-dir`에서 현재 존재하지 않는 프로젝트의 `*.json`/`*.openapi.json`(고스트)을 자동 제거.
+4. 메모리상 그래프로 `combine` → `_combined.json`, 누적 IR로 repo 전체 `_openapi.json` 생성.
+
+```bash
+./gradlew run --args="refresh --repo ../.repo --out-dir ./json"
+./gradlew run --args="refresh --repo ../.repo --no-pull"     # 이미 최신이면 pull 생략
+```
+
+> 결정적·멱등: 같은 소스에서 재실행하면 동일 산출물. 소스 pull/프로젝트 추가 후에는 이 한
+> 명령이면 [§7](#7-한계--트러블슈팅)의 stale/ghost 함정을 모두 피한다.
+
 ### 3.2 `combine` — 서비스 간 통합
 
 서비스별 그래프를 합쳐 **S2S(service-to-service)** 엣지와 이벤트 흐름을 잇는다.

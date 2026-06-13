@@ -15,6 +15,7 @@ fun main(args: Array<String>) {
     val opts = parseOpts(args.drop(1))
     when (cmd) {
         "analyze" -> cmdAnalyze(opts)
+        "refresh" -> cmdRefresh(opts)
         "openapi" -> cmdOpenApi(opts)
         "impact" -> cmdImpact(opts)
         "combine" -> cmdCombine(opts)
@@ -36,7 +37,7 @@ private class Opts(
 private fun parseOpts(args: List<String>): Opts {
     val flags = HashMap<String, String>()
     val bools = HashSet<String>()
-    val boolNames = setOf("--include-other")
+    val boolNames = setOf("--include-other", "--no-pull")
     var i = 0
     while (i < args.size) {
         val a = args[i]
@@ -92,6 +93,68 @@ private fun cmdAnalyze(opts: Opts) {
         "nodes" to graph.nodes.size, "edges" to graph.edges.size,
     )
     dump(graph, opts["--out"], meta)
+}
+
+private fun cmdRefresh(opts: Opts) {
+    val repo = File(opts["--repo"] ?: "../.repo")
+    val outDir = File(opts["--out-dir"] ?: "./json").also { it.mkdirs() }
+    val profile = opts["--profile"]
+    val props = loadProps(opts["--props"])
+    val includeOther = opts.has("--include-other")
+    val projects = repo.listFiles { f -> f.isDirectory && !f.name.startsWith(".") }
+        ?.sortedBy { it.name } ?: emptyList()
+    if (projects.isEmpty()) { System.err.println("refresh: no project dirs under ${repo.path}"); exitProcess(2) }
+
+    // 1) pull each project's currently-checked-out branch (fast-forward only)
+    if (!opts.has("--no-pull")) {
+        for (p in projects) {
+            if (!GitLog.isRepo(p)) { System.err.println("  - ${p.name}: (not a git repo, skip pull)"); continue }
+            val branch = GitLog.currentBranch(p)
+            val (ok, msg) = GitLog.pull(p)
+            val tail = msg.lineSequence().lastOrNull { it.isNotBlank() }?.take(80) ?: ""
+            System.err.println("  - ${p.name}@$branch: ${if (ok) "pulled" else "PULL FAILED"} ($tail)")
+        }
+    }
+
+    // 2) analyze each project once; reuse the IR for both graph and OpenAPI
+    val builtGraphs = ArrayList<CallGraph>()
+    val allFiles = ArrayList<IrFile>()
+    val liveBases = LinkedHashSet<String>()
+    for (p in projects) {
+        val files = AnalysisSession().analyze(repo.path, p.name, profile, props)
+        if (files.isEmpty()) continue // no kt/java sources (e.g. a frontend dir) — no ghost output
+        liveBases.add(p.name)
+        allFiles.addAll(files)
+        val snippets = File(p, "build/generated-snippets").takeIf { it.isDirectory }?.path
+        val graph = GraphBuilder(files, includeOther, RestDocs.load(snippets)).build()
+        builtGraphs.add(graph)
+        File(outDir, "${p.name}.json").writeText(JsonOutput.write(graph, linkedMapOf(
+            "command" to "analyze", "project" to p.name, "nodes" to graph.nodes.size, "edges" to graph.edges.size)))
+        val oapi = OpenApi.build(files, title = p.name, enrich = RestDocs.loadApi(snippets))
+        File(outDir, "${p.name}.openapi.json").writeText(JsonOutput.writeValue(oapi))
+        System.err.println("  + ${p.name}: ${graph.nodes.size} nodes, ${graph.edges.size} edges")
+    }
+
+    // 3) prune ghost outputs for projects no longer present/sourced
+    outDir.listFiles { f ->
+        f.isFile && f.name.endsWith(".json") && !f.name.startsWith("_")
+    }?.forEach { f ->
+        val base = f.name.removeSuffix(".openapi.json").removeSuffix(".json")
+        if (base !in liveBases) { f.delete(); System.err.println("  ~ pruned ghost ${f.name}") }
+    }
+
+    // 4) combine (in-memory) + repo-wide OpenAPI
+    val combined = CrossRun.combine(builtGraphs)
+    val s2s = combined.edges.count { it.kind == EdgeKind.S2S }
+    File(outDir, "_combined.json").writeText(JsonOutput.write(combined, linkedMapOf(
+        "command" to "refresh/combine", "projects" to liveBases.toList(),
+        "nodes" to combined.nodes.size, "edges" to combined.edges.size, "s2sEdges" to s2s)))
+    val allOapi = OpenApi.build(allFiles, title = opts["--title"] ?: "flowmap-all")
+    File(outDir, "_openapi.json").writeText(JsonOutput.writeValue(allOapi))
+
+    @Suppress("UNCHECKED_CAST")
+    val paths = (allOapi["paths"] as? Map<String, *>)?.size ?: 0
+    System.err.println("refresh done: ${liveBases.size} projects, combined ${combined.nodes.size} nodes / $s2s s2s, openapi $paths paths -> ${outDir.path}")
 }
 
 private fun cmdOpenApi(opts: Opts) {
@@ -248,6 +311,7 @@ private fun usage() {
         """
         callgraph (Kotlin Analysis API)
           analyze --repo <dir> [--project P] [--out f.json] [--include-other] [--profile p] [--props kv.txt] [--restdocs dir]
+          refresh --repo <dir> [--out-dir ./json] [--no-pull] [--include-other] [--profile p] [--props kv.txt] [--title T]
           openapi --repo <dir> [--project P] [--out f.json] [--restdocs dir] [--title T] [--api-version V] [--profile p] [--props kv.txt]
           impact  --git <repo> (--graph g.json | --repo <dir> --project P) [--branch b] [--max N | --range A..B] [--depth N] [--out f.json]
           combine --graphs a.json,b.json,... | --dir <dir of *.json> [--out f.json]

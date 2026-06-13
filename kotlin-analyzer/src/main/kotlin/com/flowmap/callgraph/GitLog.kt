@@ -29,8 +29,26 @@ object GitLog {
         return out
     }
 
+    /** Run git capturing stdout+stderr and the exit code (for pull). */
+    private fun runWithCode(repo: File, vararg args: String): Pair<String, Int> {
+        val p = ProcessBuilder(listOf("git", "-C", repo.absolutePath) + args)
+            .redirectErrorStream(true).start()
+        val out = p.inputStream.bufferedReader().readText()
+        val code = p.waitFor()
+        return out to code
+    }
+
     fun isRepo(repo: File): Boolean =
         run(repo, "rev-parse", "--is-inside-work-tree").trim() == "true"
+
+    /** Currently checked-out branch (the "selected" branch), or "HEAD" if detached. */
+    fun currentBranch(repo: File): String = run(repo, "rev-parse", "--abbrev-ref", "HEAD").trim()
+
+    /** Fast-forward pull the current branch. Returns (ok, trimmed combined output). */
+    fun pull(repo: File): Pair<Boolean, String> {
+        val (out, code) = runWithCode(repo, "pull", "--ff-only")
+        return (code == 0) to out.trim()
+    }
 
     /** Pick the default branch: explicit override → origin/HEAD → main/master/develop → current HEAD. */
     fun resolveBranch(repo: File, override: String?): String? {

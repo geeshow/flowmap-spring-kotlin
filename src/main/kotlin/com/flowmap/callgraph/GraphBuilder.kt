@@ -55,6 +55,10 @@ class GraphBuilder(
 
     private fun layerOf(t: IrType): Layer {
         for (ann in t.annotationSimpleNames) Classify.LAYER_ANNOTATIONS[ann]?.let { return it }
+        // Declarative HTTP clients (@FeignClient / @HttpExchange) are external — their
+        // calls become `ext:` nodes; tracking the interface declaration too would emit
+        // a duplicate OTHER node for the same client.
+        if (t.isFeign || t.isHttpExchange) return Layer.EXTERNAL
         if (t.supertypeSimpleNames.any { it in Classify.REPOSITORY_BASE_TYPES }) return Layer.REPOSITORY
         if (t.supertypeSimpleNames.any { it in Classify.BATCH_COMPONENT_SUPERTYPES }) return Layer.BATCH
         return Layer.OTHER

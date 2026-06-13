@@ -16,8 +16,17 @@ class ExternalResolver(private val constEval: ConstantEvaluator) {
     fun isFeign(cls: ClassDescriptor): Boolean =
         cls.annotations.any { shortName(it) in Classify.FEIGN_CLIENT_ANNOTATIONS }
 
+    /**
+     * A Spring 6 HTTP-interface client. Detected by a class-level `@HttpExchange`
+     * OR by any method carrying a `@GetExchange`/`@PostExchange`/… annotation —
+     * the class-level annotation is optional (it only sets a base path), so
+     * interfaces that declare exchanges per-method must still be recognized.
+     */
     fun isHttpExchange(cls: ClassDescriptor): Boolean =
-        cls.annotations.any { shortName(it) in Classify.HTTP_EXCHANGE_ANNOTATIONS }
+        cls.annotations.any { shortName(it) in Classify.HTTP_EXCHANGE_ANNOTATIONS } ||
+            cls.unsubstitutedMemberScope.getContributedDescriptors()
+                .filterIsInstance<FunctionDescriptor>()
+                .any { fn -> fn.annotations.any { shortName(it) in Classify.EXCHANGE_VERBS.keys } }
 
     fun resolveDeclarative(
         callee: FunctionDescriptor,

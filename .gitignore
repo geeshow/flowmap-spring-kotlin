@@ -11,6 +11,11 @@ out/
 *.iml
 .DS_Store
 
+# --- local config -------------------------------------------------------------
+# Machine-specific run config (absolute OUT_DIR etc.). The committed template is
+# flowmap.config.example.
+flowmap.config
+
 # --- generated analysis output ------------------------------------------------
 # Analysis output embeds analyzed-project internals (package names, file paths,
 # resolved internal URLs) — never publish it. `refresh` writes into ./json/.

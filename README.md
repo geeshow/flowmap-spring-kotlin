@@ -159,7 +159,17 @@ flowchart LR
 ```bash
 ./gradlew build
 
-# ── 한 방에 전부 (권장) ────────────────────────────────────────────
+# ── 설정 파일로 한 방에 (권장) ─────────────────────────────────────
+# flowmap.config 를 만들어 두면 인자 없이 ./gradlew run 만으로 실행됩니다.
+#   cp flowmap.config.example flowmap.config   # 그리고 REPO/OUT_DIR 수정
+./gradlew run
+# flowmap.config (KEY=VALUE, # 주석, ${VAR} 치환 지원):
+#   COMMAND=refresh                 # 실행할 명령 (기본 refresh)
+#   REPO=.repo                      # 분석 repo 루트   -> --repo
+#   OUT_DIR=../flowmap5/docs/web/data   # 출력 위치     -> --out-dir
+#   EXTRA_ARGS=--no-pull --no-impact    # 추가 플래그(그대로 전달)
+
+# ── 인자를 직접 주는 방식 ───────────────────────────────────────────
 # .repo의 모든 프로젝트를 최신화(pull)한 뒤, 가능한 모든 분석을 한 번에:
 #   호출그래프 + OpenAPI + RestDocs 보강 + 커밋(impact) + combine(게이트웨이 자동발견) + manifest
 # 기본 --repo 는 .repo, 기본 --out-dir 는 ./json

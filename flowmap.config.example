@@ -1,0 +1,13 @@
+# flowmap.config — read when the analyzer is launched with no args
+# (a bare `./gradlew run`). Copy to `flowmap.config` and edit for your machine.
+# Format: shell-style KEY=VALUE, `#` comments, ${VAR}/$VAR expansion.
+#
+# --- backend analyzer (./gradlew run) -----------------------------------------
+COMMAND=refresh                 # subcommand to run (default: refresh)
+REPO=.repo                      # analysis repo root        -> --repo
+OUT_DIR=../flowmap5/docs/web/data   # output directory      -> --out-dir
+# EXTRA_ARGS=--no-pull --no-impact  # any extra flags, appended verbatim
+
+# --- frontend ts-analyzer (used by its own runner, ignored by the backend) ----
+NAME=graph
+BACKEND=${OUT_DIR}/_combined.json

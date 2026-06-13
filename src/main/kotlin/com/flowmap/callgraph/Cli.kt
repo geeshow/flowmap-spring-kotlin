@@ -11,6 +11,19 @@ import kotlin.system.exitProcess
 const val DEFAULT_REPO = ".repo"
 
 /**
+ * Config file read when the program is launched with NO args (e.g. a bare
+ * `./gradlew run`). Path is overridable with the `FLOWMAP_CONFIG` env var.
+ * Format: shell-style `KEY=VALUE` lines, `#` comments, `${VAR}`/`$VAR`
+ * expansion against earlier keys then the environment. Recognised keys:
+ *   COMMAND   the subcommand to run         (default: refresh)
+ *   REPO      analysis repo root            -> --repo
+ *   OUT_DIR   output directory              -> --out-dir
+ *   EXTRA_ARGS  extra CLI flags, space-separated, appended verbatim
+ * Keys used only by the frontend ts-analyzer (NAME, BACKEND, …) are ignored here.
+ */
+const val DEFAULT_CONFIG = "flowmap.config"
+
+/**
  * CLI. The one-shot command is `refresh`: pull every project under `--repo`,
  * then run ALL analyses at once (call graph + OpenAPI + RestDocs enrichment +
  * per-project commit/impact), and write each project's graph/openapi/impact
@@ -19,8 +32,12 @@ const val DEFAULT_REPO = ".repo"
  *   analyze --repo <dir> [--project P] [--out f.json] [--include-other] [--profile p] [--props f]
  *   search  --method M [--graph g.json | --repo <dir>] [--direction both|callers|callees] [--depth N] [--out f]
  *   stats   [--graph g.json | --repo <dir>] [--project P] [--profile p]
+ *
+ * With no args, the effective args are read from [DEFAULT_CONFIG] (so a bare
+ * `./gradlew run` runs `refresh` against the configured repo/out-dir).
  */
-fun main(args: Array<String>) {
+fun main(rawArgs: Array<String>) {
+    val args = if (rawArgs.isEmpty()) argsFromConfig() else rawArgs
     if (args.isEmpty()) { usage(); exitProcess(2) }
     val cmd = args[0]
     val opts = parseOpts(args.drop(1))
@@ -69,6 +86,56 @@ private fun loadProps(path: String?): Map<String, String> {
         if (t.isEmpty() || t.startsWith("#")) null
         else t.indexOf('=').takeIf { it > 0 }?.let { t.substring(0, it).trim() to t.substring(it + 1).trim() }
     }.toMap()
+}
+
+/**
+ * Build the effective CLI args from [DEFAULT_CONFIG] (or `$FLOWMAP_CONFIG`).
+ * Returns an empty array when no config exists, so `main` falls back to usage.
+ */
+private fun argsFromConfig(): Array<String> {
+    val path = System.getenv("FLOWMAP_CONFIG") ?: DEFAULT_CONFIG
+    val f = File(path)
+    if (!f.isFile) {
+        System.err.println("no args and no config file ($path) — run a command, or create $DEFAULT_CONFIG")
+        return emptyArray()
+    }
+    val cfg = parseConfig(f)
+    val out = ArrayList<String>()
+    out.add(cfg["COMMAND"]?.takeIf { it.isNotBlank() } ?: "refresh")
+    cfg["REPO"]?.takeIf { it.isNotBlank() }?.let { out.add("--repo"); out.add(it) }
+    cfg["OUT_DIR"]?.takeIf { it.isNotBlank() }?.let { out.add("--out-dir"); out.add(it) }
+    cfg["EXTRA_ARGS"]?.takeIf { it.isNotBlank() }?.let { extra ->
+        out.addAll(extra.split(Regex("\\s+")).filter { it.isNotEmpty() })
+    }
+    System.err.println("config: ${f.path} -> ${out.joinToString(" ")}")
+    return out.toTypedArray()
+}
+
+private val CONFIG_VAR = Regex("""\$\{([A-Za-z_][A-Za-z0-9_]*)}|\$([A-Za-z_][A-Za-z0-9_]*)""")
+
+/**
+ * Parse a shell-style `KEY=VALUE` config: skips blank/`#` lines, strips matching
+ * surrounding quotes, and expands `${VAR}`/`$VAR` against keys already parsed
+ * (in order) then the process environment (unknown vars expand to empty).
+ */
+private fun parseConfig(f: File): Map<String, String> {
+    val map = LinkedHashMap<String, String>()
+    for (line in f.readLines()) {
+        val t = line.trim()
+        if (t.isEmpty() || t.startsWith("#")) continue
+        val eq = t.indexOf('=')
+        if (eq <= 0) continue
+        val k = t.substring(0, eq).trim()
+        var v = t.substring(eq + 1).trim()
+        if (v.length >= 2 && (v.first() == '"' || v.first() == '\'') && v.last() == v.first()) {
+            v = v.substring(1, v.length - 1)
+        }
+        map[k] = CONFIG_VAR.replace(v) { m ->
+            val name = m.groupValues[1].ifEmpty { m.groupValues[2] }
+            map[name] ?: System.getenv(name) ?: ""
+        }
+    }
+    return map
 }
 
 private fun graphFromOpts(opts: Opts): Pair<CallGraph, Int> {
@@ -390,6 +457,10 @@ private fun usage() {
     System.err.println(
         """
         callgraph (Kotlin Analysis API)   default --repo: $DEFAULT_REPO
+
+          (no args) — read the command + flags from $DEFAULT_CONFIG (or ${'$'}FLOWMAP_CONFIG):
+                      COMMAND=refresh / REPO=.repo / OUT_DIR=<dir> / EXTRA_ARGS=...
+                      lets `./gradlew run` work with zero arguments.
 
           refresh — ONE-SHOT: pull every project + run ALL analyses (graph + openapi + restdocs + impact)
                     + combine (auto-discovers gateways from spring.cloud.gateway.routes) + manifest

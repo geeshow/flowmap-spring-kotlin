@@ -71,7 +71,29 @@ kafka:<topic> / redis / db:table:<t> / db:jdbc   인프라 리소스 노드
 # 저장소 루트(= 분석기 프로젝트 루트)에서
 ./gradlew build                          # 컴파일 + 테스트
 ./gradlew run --args="<command> ..."     # 실행
+./gradlew run                            # 인자 없이 → flowmap.config 의 설정으로 실행
 ```
+
+### 2.1 `flowmap.config` — 인자 없이 실행
+
+`./gradlew run` 을 인자 없이 실행하면 저장소 루트의 `flowmap.config`(또는
+`$FLOWMAP_CONFIG` 가 가리키는 파일)에서 명령과 옵션을 읽는다. 머신마다 다른
+출력 경로를 매번 `--args` 로 넘기지 않아도 된다. `flowmap.config.example` 을
+복사해 쓰면 된다.
+
+```ini
+# KEY=VALUE, '#' 주석, ${VAR}/$VAR 치환(앞 키 → 환경변수 순) 지원
+COMMAND=refresh                     # 실행할 명령 (기본 refresh)
+REPO=.repo                          # 분석 repo 루트     -> --repo
+OUT_DIR=../flowmap5/docs/web/data   # 출력 디렉터리       -> --out-dir
+EXTRA_ARGS=--no-pull --no-impact    # 추가 플래그(그대로 뒤에 붙음)
+```
+
+- `--args` 를 주면 config 는 무시되고 그 인자가 그대로 쓰인다(직접 실행 우선).
+- `flowmap.config` 는 머신별 절대경로를 담으므로 `.gitignore` 대상이고,
+  공유용 템플릿만 `flowmap.config.example` 로 커밋한다.
+- 프론트엔드(ts-analyzer)용 키(`NAME`, `BACKEND` …)는 백엔드에선 무시된다 —
+  같은 파일을 두 도구가 공유할 수 있다.
 
 의존성은 `kotlin-compiler-embeddable:2.0.21`(K1 프론트엔드) 하나가 핵심이고 `snakeyaml`,
 `jackson`, 그리고 분석 classpath에 올리는 Spring 애너테이션 jar들이 보조다. **impact의

@@ -11,6 +11,8 @@ class GraphBuilder(
     private val includeOther: Boolean = false,
     /** {(httpMethod, normalizedPath) -> description} from REST Docs (see [RestDocs]). */
     private val descriptions: Map<Pair<String, String>, String> = emptyMap(),
+    /** Drop non-public methods, contracting `public -> private -> public` to `public -> public`. */
+    private val publicOnly: Boolean = false,
 ) {
     private val typeByFqcn: Map<String, Pair<IrType, IrFile>> =
         files.flatMap { f -> f.types.map { it.fqcn to (it to f) } }.toMap()
@@ -45,7 +47,8 @@ class GraphBuilder(
         }
         // 3) DB table resource edges (repository -> table)
         wireDb()
-        return CallGraph(nodes.values.toList(), edges.values.toList())
+        val graph = CallGraph(nodes.values.toList(), edges.values.toList())
+        return if (publicOnly) GraphTransform.publicOnly(graph) else graph
     }
 
     // ---- classification ----

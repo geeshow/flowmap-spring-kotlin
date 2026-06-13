@@ -20,6 +20,7 @@ const val DEFAULT_REPO = ".repo"
  *   OUT_DIR   output directory              -> --out-dir
  *   SYNC_DIR  web app data dir to assemble  -> --sync-dir   (optional)
  *   FRONTEND_DIR  ts-analyzer output dir(s) -> --frontend-dir (optional, CSV)
+ *   PUBLIC_ONLY  true -> --public-only      (drop non-public methods, optional)
  *   EXTRA_ARGS  extra CLI flags, space-separated, appended verbatim
  * Keys used only by the frontend ts-analyzer (NAME, BACKEND, …) are ignored here.
  */
@@ -67,7 +68,7 @@ private class Opts(
 private fun parseOpts(args: List<String>): Opts {
     val flags = HashMap<String, String>()
     val bools = HashSet<String>()
-    val boolNames = setOf("--include-other", "--no-pull", "--no-impact")
+    val boolNames = setOf("--include-other", "--no-pull", "--no-impact", "--public-only")
     var i = 0
     while (i < args.size) {
         val a = args[i]
@@ -108,6 +109,7 @@ private fun argsFromConfig(): Array<String> {
     cfg["OUT_DIR"]?.takeIf { it.isNotBlank() }?.let { out.add("--out-dir"); out.add(it) }
     cfg["SYNC_DIR"]?.takeIf { it.isNotBlank() }?.let { out.add("--sync-dir"); out.add(it) }
     cfg["FRONTEND_DIR"]?.takeIf { it.isNotBlank() }?.let { out.add("--frontend-dir"); out.add(it) }
+    cfg["PUBLIC_ONLY"]?.takeIf { it.equals("true", true) || it == "1" }?.let { out.add("--public-only") }
     cfg["EXTRA_ARGS"]?.takeIf { it.isNotBlank() }?.let { extra ->
         out.addAll(extra.split(Regex("\\s+")).filter { it.isNotEmpty() })
     }
@@ -153,7 +155,8 @@ private fun graphFromOpts(opts: Opts): Pair<CallGraph, Int> {
         profile = opts["--profile"],
         extraProps = loadProps(opts["--props"]),
     )
-    return GraphBuilder(files, includeOther = opts.has("--include-other")).build() to files.size
+    return GraphBuilder(files, includeOther = opts.has("--include-other"),
+        publicOnly = opts.has("--public-only")).build() to files.size
 }
 
 private fun cmdAnalyze(opts: Opts) {
@@ -168,7 +171,8 @@ private fun cmdAnalyze(opts: Opts) {
     if (opts["--restdocs"] != null) {
         System.err.println("restdocs: loaded ${descriptions.size} API descriptions from ${opts["--restdocs"]}")
     }
-    val graph = GraphBuilder(files, includeOther = opts.has("--include-other"), descriptions = descriptions).build()
+    val graph = GraphBuilder(files, includeOther = opts.has("--include-other"), descriptions = descriptions,
+        publicOnly = opts.has("--public-only")).build()
     val meta = linkedMapOf<String, Any?>(
         "command" to "analyze", "repo" to repo, "project" to opts["--project"],
         "profile" to opts["--profile"], "files" to files.size,
@@ -183,6 +187,7 @@ private fun cmdRefresh(opts: Opts) {
     val profile = opts["--profile"]
     val props = loadProps(opts["--props"])
     val includeOther = opts.has("--include-other")
+    val publicOnly = opts.has("--public-only")
     val projects = repo.listFiles { f -> f.isDirectory && !f.name.startsWith(".") }
         ?.sortedBy { it.name } ?: emptyList()
     if (projects.isEmpty()) { System.err.println("refresh: no project dirs under ${repo.path}"); exitProcess(2) }
@@ -208,7 +213,7 @@ private fun cmdRefresh(opts: Opts) {
         liveBases.add(p.name)
         allFiles.addAll(files)
         val snippets = File(p, "build/generated-snippets").takeIf { it.isDirectory }?.path
-        val graph = GraphBuilder(files, includeOther, RestDocs.load(snippets)).build()
+        val graph = GraphBuilder(files, includeOther, RestDocs.load(snippets), publicOnly = publicOnly).build()
         builtGraphs.add(graph)
         File(outDir, "${p.name}.json").writeText(JsonOutput.write(graph, linkedMapOf(
             "command" to "analyze", "project" to p.name, "nodes" to graph.nodes.size, "edges" to graph.edges.size)))
@@ -491,12 +496,13 @@ private fun usage() {
                     + optional sync (assemble the web app's data dir; ports sync-data.sh)
             refresh [--repo <dir>] [--out-dir ./json] [--no-pull] [--no-impact]
                     [--impact-max N] [--impact-depth N] [--branch b]
-                    [--include-other] [--profile p] [--props kv.txt] [--title T]
+                    [--include-other] [--public-only] [--profile p] [--props kv.txt] [--title T]
                     [--gateway-routes routes.yml] [--gateway-name N]   # explicit gateway (else auto-discovered)
                     [--sync-dir <web data dir>] [--frontend-dir d1,d2] # copy per-project artifacts + manifest.json there
+                    # --public-only: keep only public methods, contracting public->private->public to public->public
 
           --- single-analysis tools (debugging / ad-hoc) ---
-          analyze --repo <dir> [--project P] [--out f.json] [--include-other] [--profile p] [--props kv.txt] [--restdocs dir]
+          analyze --repo <dir> [--project P] [--out f.json] [--include-other] [--public-only] [--profile p] [--props kv.txt] [--restdocs dir]
           openapi --repo <dir> [--project P] [--out f.json] [--restdocs dir] [--title T] [--api-version V] [--profile p] [--props kv.txt]
           impact  --git <repo> (--graph g.json | --repo <dir> --project P) [--branch b] [--max N | --range A..B] [--depth N] [--out f.json]
           combine --graphs a.json,b.json,... | --dir <dir of *.json> [--gateway-routes routes.yml] [--gateway-name N] [--out f.json]

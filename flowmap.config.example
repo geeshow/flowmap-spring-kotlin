@@ -14,6 +14,8 @@ OUT_DIR=../docs/web/data
 # here and writes the app-facing manifest.json. Replaces scripts/sync-data.sh.
 # FRONTEND_DIR=../../flowmap-react/json
 # ts-analyzer output dir(s), comma-separated -> --frontend-dir (pulled into SYNC_DIR)
+# PUBLIC_ONLY=true
+# keep only public methods; contract public->private->public into public->public
 # EXTRA_ARGS=--no-pull --no-impact  # any extra flags, appended verbatim
 
 # --- frontend ts-analyzer (used by its own runner, ignored by the backend) ----
